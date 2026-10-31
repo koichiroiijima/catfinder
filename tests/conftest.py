@@ -1,0 +1,76 @@
+from __future__ import annotations
+
+import asyncio
+import io
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+
+import pytest
+from fastapi.testclient import TestClient
+from PIL import Image
+
+from app.config import Settings
+from app.main import create_app
+from app.schemas import CatVerdict
+
+
+def make_image(
+    color: tuple[int, int, int] = (200, 120, 40),
+    *,
+    size: tuple[int, int] = (32, 32),
+    image_format: str = "PNG",
+) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", size, color).save(buffer, format=image_format)
+    return buffer.getvalue()
+
+
+class FakeAnalyzer:
+    def __init__(
+        self,
+        verdicts: dict[bytes, CatVerdict] | None = None,
+        failures: set[bytes] | None = None,
+    ) -> None:
+        self.verdicts = verdicts or {}
+        self.failures = failures or set()
+        self.calls: list[bytes] = []
+
+    async def analyze(self, path, media_type: str) -> CatVerdict:
+        await asyncio.sleep(0.01)
+        data = path.read_bytes()
+        self.calls.append(data)
+        if data in self.failures:
+            raise RuntimeError("model exploded")
+        return self.verdicts[data]
+
+
+@pytest.fixture
+def settings(tmp_path) -> Settings:
+    return Settings(
+        _env_file=None,
+        llm_model="test-vision-model",
+        llm_concurrency=2,
+        max_files=3,
+        max_file_mb=2,
+        analysis_ttl_minutes=60,
+        upload_dir=tmp_path / "uploads",
+    )
+
+
+@contextmanager
+def client_for(settings: Settings, analyzer) -> Iterator[TestClient]:
+    with TestClient(create_app(settings, analyzer)) as client:
+        yield client
+
+
+def wait_for_completion(client: TestClient, job_id: str, timeout: float = 5.0) -> dict:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        response = client.get(f"/api/analyses/{job_id}")
+        assert response.status_code == 200
+        payload = response.json()
+        if payload["status"] == "completed":
+            return payload
+        time.sleep(0.02)
+    raise AssertionError(f"analysis {job_id} did not complete")

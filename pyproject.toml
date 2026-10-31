@@ -1,0 +1,38 @@
+[project]
+name = "catfinder"
+version = "0.1.0"
+description = "Find cat images with an LLM-backed web UI"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.162.0",
+    "langchain>=1.4.7",
+    "langchain-openai>=1.7.3",
+    "pillow>=13.0.0",
+    "pydantic-settings>=2.16.2",
+    "python-multipart>=0.0.33",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.4.1",
+    "ruff>=0.17.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
