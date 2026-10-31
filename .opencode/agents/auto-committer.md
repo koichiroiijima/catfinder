@@ -1,6 +1,7 @@
 ---
 description: 未コミットのファイル変更を確認し、commit スキルで自律的にコミットする（push はしない）
 mode: subagent
+model: openrouter/nvidia/nemotron-3.5-lightning:free
 color: "#2f8a5b"
 permissions:
   - action: read
