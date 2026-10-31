@@ -81,6 +81,8 @@ pending ──> running ──> cat
 
 `create_app(settings, analyzer)` はテスト用の注入点である。
 本番では `create_analyzer(settings)` が `LangChainCatAnalyzer` を組み立てる。
+既定の接続先は OpenRouter で、モデルは `nvidia/nemotron-3.5-super-vl:free`。
+`LLM_BASE_URL` / `LLM_MODEL` を上書きすれば他の OpenAI 互換 API に差し替えられる。
 `LLM_MODEL` が空の場合はアナライザーが `None` になり、判定 API は 503 を返す。
 
 ## LLM 連携
@@ -96,6 +98,10 @@ ChatOpenAI(
 )
 ```
 
+- 既定値は OpenRouter（`https://openrouter.ai/api/v1`）の
+  `nvidia/nemotron-3.5-super-vl:free`。`LLM_API_KEY` に OpenRouter のキーが必要。
+- モデルを差し替える場合は `LLM_MODEL` を変更する。接続先も変える場合は
+  `LLM_BASE_URL` / `LLM_API_KEY` を併せて上書きする。
 - 画像は LangChain の標準 content block
   `{"type": "image", "base64": ..., "mime_type": ...}` で渡す。
 - 出力は `CatVerdict`（`has_cat`, `confidence`, `reason`）に固定する。

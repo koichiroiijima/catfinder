@@ -7,7 +7,8 @@ React + Vite の UI が進捗と結果を表示します。
 ## 特長
 
 - 複数画像をまとめてアップロードし、画像ごとに「猫あり / 猫なし / エラー」を表示
-- OpenAI 互換 API であれば、OpenAI・Ollama・vLLM・LiteLLM などを `LLM_BASE_URL` で切り替え可能
+- 既定で OpenRouter の vision モデルを使用。OpenAI 互換 API であれば
+  OpenAI・Ollama・vLLM・LiteLLM などを `LLM_BASE_URL` / `LLM_MODEL` で切り替え可能
 - 結果の絞り込み、件数集計、判定理由・確信度の表示
 - 1 枚の判定が失敗しても、残りの画像の判定は継続
 - 履歴は持たず、結果と画像は一定時間後に自動削除（ローカル利用向け）
@@ -32,16 +33,23 @@ uv sync
 cp .env.example .env
 ```
 
-`.env` を編集し、利用する vision モデルを設定してください。
+`.env` を編集し、`LLM_API_KEY` に OpenRouter の API キーを設定してください。
+モデルと接続先は既定で次の値になっています（[OpenRouter](https://openrouter.ai/)）。
+
+```dotenv
+LLM_BASE_URL=https://openrouter.ai/api/v1
+LLM_API_KEY=replace-with-your-openrouter-key
+LLM_MODEL=nvidia/nemotron-3.5-super-vl:free
+```
+
+別のモデルを使う場合は `LLM_MODEL` を差し替えます。ローカルの Ollama など
+OpenAI 互換サーバーに向ける場合は、次のように 3 つとも上書きします。
 
 ```dotenv
 LLM_BASE_URL=http://127.0.0.1:11434/v1
 LLM_API_KEY=not-needed
 LLM_MODEL=your-vision-model
 ```
-
-OpenAI を使う場合は `LLM_BASE_URL` を削除（または公式 URL を指定）し、
-`LLM_API_KEY` に API キーを設定します。
 
 ## 起動
 
@@ -101,9 +109,9 @@ Swagger UI は API 起動中に http://127.0.0.1:8000/docs で確認できます
 
 | 環境変数 | 既定値 | 説明 |
 | --- | --- | --- |
-| `LLM_BASE_URL` | なし | OpenAI 互換 API のベース URL |
-| `LLM_API_KEY` | `not-needed` | API キー（ローカルサーバーでは不要な場合あり） |
-| `LLM_MODEL` | 空 | vision 対応モデル名。未設定時は判定 API が 503 |
+| `LLM_BASE_URL` | `https://openrouter.ai/api/v1` | OpenAI 互換 API のベース URL |
+| `LLM_API_KEY` | `not-needed` | API キー。OpenRouter では必須 |
+| `LLM_MODEL` | `nvidia/nemotron-3.5-super-vl:free` | vision 対応モデル名。空にすると判定 API が 503 |
 | `LLM_TIMEOUT_SECONDS` | `60` | 1 枚あたりのタイムアウト |
 | `LLM_MAX_RETRIES` | `2` | LangChain 側のリトライ回数 |
 | `LLM_CONCURRENCY` | `4` | 同時に判定する画像数 |

@@ -16,9 +16,11 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    llm_base_url: str | None = None
+    # OpenRouter is the default provider. Any other OpenAI-compatible endpoint
+    # (OpenAI, Ollama, vLLM, LiteLLM, ...) can be selected with LLM_BASE_URL.
+    llm_base_url: str | None = "https://openrouter.ai/api/v1"
     llm_api_key: str = "not-needed"
-    llm_model: str = ""
+    llm_model: str = "nvidia/nemotron-3.5-super-vl:free"
     llm_timeout_seconds: float = Field(default=60.0, gt=0)
     llm_max_retries: int = Field(default=2, ge=0, le=10)
     llm_concurrency: int = Field(default=4, ge=1, le=32)

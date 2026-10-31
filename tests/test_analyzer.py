@@ -78,9 +78,15 @@ def test_parse_verdict_normalizes_percentage_and_clamps():
 
 
 def test_create_analyzer_requires_a_model():
-    assert create_analyzer(Settings(_env_file=None)) is None
-    analyzer = create_analyzer(Settings(_env_file=None, llm_model="vision-test"))
+    assert create_analyzer(Settings(_env_file=None, llm_model="")) is None
+    analyzer = create_analyzer(Settings(_env_file=None))
     assert isinstance(analyzer, LangChainCatAnalyzer)
+
+
+def test_default_model_targets_openrouter():
+    settings = Settings(_env_file=None)
+    assert settings.llm_base_url == "https://openrouter.ai/api/v1"
+    assert settings.llm_model == "nvidia/nemotron-3.5-super-vl:free"
 
 
 def test_parse_verdict_rejects_non_json():

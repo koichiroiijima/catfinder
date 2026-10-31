@@ -12,8 +12,10 @@
 
 ## 未検証
 
-- 実際の vision LLM に対する判定。`.env` に有効な `LLM_BASE_URL` /
-  `LLM_API_KEY` / `LLM_MODEL` を設定し、猫画像と非猫画像で確認する必要がある。
+- 実際の vision LLM に対する判定。既定は OpenRouter の
+  `nvidia/nemotron-3.5-super-vl:free`（`LLM_BASE_URL=https://openrouter.ai/api/v1`）
+  なので、`.env` の `LLM_API_KEY` に OpenRouter のキーを設定し、猫画像と非猫画像で
+  確認する必要がある。別モデルに差し替える場合は `LLM_MODEL` を変更する。
   `RUN_LLM_INTEGRATION=1 LLM_INTEGRATION_IMAGE=... uv run pytest tests/test_integration.py`
   で確認できる。
 - 採用モデルが `json_schema` 構造化出力に対応しているか。

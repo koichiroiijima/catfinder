@@ -119,12 +119,16 @@ curl -X POST http://127.0.0.1:8000/api/analyses \
 ### `GET /api/health`
 
 ```json
-{ "status": "ok", "llm_configured": true, "model": "your-vision-model" }
+{ "status": "ok", "llm_configured": true, "model": "nvidia/nemotron-3.5-super-vl:free" }
 ```
 
 API キーなどの秘密情報は返さない。
 
 ## LLM 出力仕様
+
+既定では OpenRouter（`https://openrouter.ai/api/v1`）の
+`nvidia/nemotron-3.5-super-vl:free` を使う。`LLM_API_KEY` に OpenRouter の
+API キーが必要。モデルと接続先は `LLM_MODEL` / `LLM_BASE_URL` で差し替えられる。
 
 モデルには次の構造を要求する。
 
@@ -204,7 +208,8 @@ npm run build
 | 症状 | 確認 |
 | --- | --- |
 | 判定 API が 503 | `.env` の `LLM_MODEL` が設定されているか、`/api/health` を確認 |
-| 全画像がエラー | `LLM_BASE_URL`、API キー、モデルの vision 対応を確認。`.server.log` を見る |
+| 全画像がエラー | `LLM_BASE_URL`、`LLM_API_KEY`、モデルの vision 対応を確認。`.server.log` を見る |
+| OpenRouter で 401 / 403 | `LLM_API_KEY` に有効な OpenRouter のキーが設定されているか確認 |
 | 構造化出力で失敗する | `LLM_STRUCTURED_OUTPUT=json` を試す |
 | UI から API に届かない | `scripts/server.sh status` と Vite の proxy 設定を確認 |
 | 画像が大きすぎる | `MAX_FILE_MB` を上げるか、クライアント側で縮小する |
