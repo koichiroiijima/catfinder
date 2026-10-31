@@ -46,6 +46,12 @@ scripts/ui.sh start|stop|restart|status       # UI : 5173
 - 画像選択の object URL は追加時に生成し、削除・リセット・アンマウント時に revoke する。
 - ステータスと CSS クラスは `status-cat` / `status-no_cat` / `status-error` に対応する。
 
+## サブエージェント
+
+- `auto-committer` (`.opencode/agents/auto-committer.md`):
+  呼び出された時点の未コミット変更を `commit` スキルでコミットする。
+  ファイル編集・`git push`・ブランチ操作は行わない。
+
 ## 変更時の注意
 
 - API の形を変えたら `frontend/src/api.ts`、`tests/`、`docs/details.md` を同時に更新する。
