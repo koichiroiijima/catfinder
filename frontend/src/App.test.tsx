@@ -10,6 +10,8 @@ function jsonResponse(body: unknown, status = 200): Response {
   })
 }
 
+const modelCatalog = { models: ['vision-x', 'vision-y'], default: 'vision-x' }
+
 const completed = {
   id: 'job-1',
   status: 'completed',
@@ -18,6 +20,7 @@ const completed = {
   cat_count: 1,
   no_cat_count: 1,
   error_count: 0,
+  model: 'vision-x',
   images: [
     {
       id: 'image-1',
@@ -48,6 +51,12 @@ function selectFiles(...names: string[]) {
   fireEvent.change(input, { target: { files } })
 }
 
+function postedForm(fetchMock: ReturnType<typeof vi.fn>, index: number): FormData | undefined {
+  const body = fetchMock.mock.calls[index]?.[1]?.body
+  expect(body).toBeInstanceOf(FormData)
+  return body as FormData
+}
+
 describe('App', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn())
@@ -56,6 +65,7 @@ describe('App', () => {
   it('uploads selected images and renders verdicts', async () => {
     const fetchMock = vi.mocked(fetch)
     fetchMock
+      .mockResolvedValueOnce(jsonResponse(modelCatalog))
       .mockResolvedValueOnce(jsonResponse({ id: 'job-1', status: 'queued', total: 2 }, 202))
       .mockResolvedValueOnce(jsonResponse(completed))
 
@@ -69,17 +79,56 @@ describe('App', () => {
     expect(screen.getByText('茶色の猫が写っています。')).toBeInTheDocument()
     expect(screen.getByText('猫は写っていません。')).toBeInTheDocument()
     expect(screen.getByText('確信度 91%')).toBeInTheDocument()
+    expect(screen.getByText('判定モデル: vision-x')).toBeInTheDocument()
 
-    const [url, options] = fetchMock.mock.calls[0]
-    expect(url).toBe('/api/analyses')
-    expect(options).toMatchObject({ method: 'POST' })
-    expect(options?.body).toBeInstanceOf(FormData)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/models')
+    const postUrl = fetchMock.mock.calls[1]?.[0]
+    expect(postUrl).toBe('/api/analyses')
+    const body = postedForm(fetchMock, 1)
+    expect(body?.get('model')).toBe('vision-x')
+  })
+
+  it('sends the model chosen in the select', async () => {
+    const fetchMock = vi.mocked(fetch)
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(modelCatalog))
+      .mockResolvedValueOnce(jsonResponse({ id: 'job-1', status: 'queued', total: 2 }, 202))
+      .mockResolvedValueOnce(jsonResponse(completed))
+
+    render(<App />)
+    fireEvent.change(await screen.findByLabelText('判定モデル'), {
+      target: { value: 'vision-y' },
+    })
+    selectFiles('cat.png')
+    fireEvent.click(screen.getByRole('button', { name: '判定する' }))
+
+    await screen.findByText('茶色の猫が写っています。')
+    expect(postedForm(fetchMock, 1)?.get('model')).toBe('vision-y')
+    expect(screen.getByText('判定モデル: vision-x')).toBeInTheDocument()
+  })
+
+  it('hides the model select when the catalog is unavailable', async () => {
+    const fetchMock = vi.mocked(fetch)
+    fetchMock
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(jsonResponse({ id: 'job-1', status: 'queued', total: 1 }, 202))
+      .mockResolvedValueOnce(jsonResponse(completed))
+
+    render(<App />)
+    selectFiles('cat.png')
+    fireEvent.click(screen.getByRole('button', { name: '判定する' }))
+
+    await screen.findByText('茶色の猫が写っています。')
+    expect(screen.queryByLabelText('判定モデル')).not.toBeInTheDocument()
+    expect(postedForm(fetchMock, 1)?.has('model')).toBe(false)
   })
 
   it('shows the server error and keeps the upload panel', async () => {
-    vi.mocked(fetch).mockResolvedValueOnce(
-      jsonResponse({ detail: 'LLM が設定されていません。LLM_MODEL を設定してください。' }, 503),
-    )
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(jsonResponse(modelCatalog))
+      .mockResolvedValueOnce(
+        jsonResponse({ detail: 'LLM が設定されていません。LLM_MODEL を設定してください。' }, 503),
+      )
 
     render(<App />)
     selectFiles('cat.png')
@@ -90,8 +139,10 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: '判定する' })).toBeInTheDocument()
   })
 
-  it('shows a Japanese message when the network request fails', async () => {
-    vi.mocked(fetch).mockRejectedValueOnce(new TypeError('Failed to fetch'))
+  it('shows a Japanese message when the upload request fails', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(jsonResponse(modelCatalog))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
 
     render(<App />)
     selectFiles('cat.png')
@@ -103,6 +154,7 @@ describe('App', () => {
 
   it('filters results by status', async () => {
     vi.mocked(fetch)
+      .mockResolvedValueOnce(jsonResponse(modelCatalog))
       .mockResolvedValueOnce(jsonResponse({ id: 'job-1', status: 'queued', total: 2 }, 202))
       .mockResolvedValueOnce(jsonResponse(completed))
 
@@ -115,5 +167,13 @@ describe('App', () => {
 
     expect(screen.getByAltText('dog.png')).toBeInTheDocument()
     expect(screen.queryByAltText('cat.png')).not.toBeInTheDocument()
+  })
+
+  it('ignores the model catalog failure without surfacing an error', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(modelCatalog))
+
+    render(<App />)
+    expect(await screen.findByLabelText('判定モデル')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })

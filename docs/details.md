@@ -10,6 +10,14 @@
 - 同一ファイル（名前・サイズ・更新時刻が同じ）は重複追加しない。
 - 選択済みファイルはサムネイル・ファイル名・サイズとともに表示し、個別に削除できる。
 
+### 判定モデル
+
+- 初期表示時に `GET /api/models` を 1 回呼び、「判定モデル」セレクトボックスで
+  使用する vision モデルを選択できる。
+- 既定値は `LLM_MODEL`。選択肢が取得できなかった場合（接続先が `/models` を
+  持たない、ネットワーク断など）はセレクトボックス自体を非表示にし、
+  既定モデルでの送信に任せる。
+
 ### 判定中
 
 - 送信後は進捗バーと「n / m 枚を判定しました。」を表示する。
@@ -21,6 +29,7 @@
 - 画像ごとにサムネイル、ファイル名、ステータス、確信度、理由を表示する。
 - ステータスは「猫あり」「猫なし」「エラー」「判定中」「待機中」。
 - 集計は「猫あり」「猫なし」「エラー」の件数。
+- 使用したモデルを「判定モデル: <モデル名>」として表示する。
 - フィルタは「すべて」「猫あり」「猫なし」「エラー」。
 - エラー画像はエラー内容を表示する。
 
@@ -31,11 +40,14 @@
 ### `POST /api/analyses`
 
 `multipart/form-data` で `files` フィールドを複数送信する。
+`model` フィールド（任意）で使用する vision モデルを指定する。
+未指定・空文字の場合は `LLM_MODEL` が使われる。
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/analyses \
   -F "files=@cat.jpg" \
-  -F "files=@dog.png"
+  -F "files=@dog.png" \
+  -F "model=nvidia/nemotron-3.5-super-vl:free"
 ```
 
 成功: `202 Accepted`
@@ -56,6 +68,7 @@ curl -X POST http://127.0.0.1:8000/api/analyses \
 | `400` | 枚数超過 | 一度に送信できる画像は 50 枚までです。 |
 | `400` | 画像として不正 | 画像として読み込めないファイルです。 |
 | `400` | 非対応形式 | JPEG / PNG / WebP のみ対応しています。 |
+| `400` | 未登録のモデル指定 | 対応していないモデルです。選択肢から選んでください。 |
 | `413` | サイズ超過 | 画像が大きすぎます（上限 15MB）。 |
 | `503` | `LLM_MODEL` 未設定 | LLM が設定されていません。LLM_MODEL を設定してください。 |
 
@@ -72,6 +85,7 @@ curl -X POST http://127.0.0.1:8000/api/analyses \
   "cat_count": 1,
   "no_cat_count": 0,
   "error_count": 0,
+  "model": "nvidia/nemotron-3.5-super-vl:free",
   "images": [
     {
       "id": "9a2b...",
@@ -116,6 +130,28 @@ curl -X POST http://127.0.0.1:8000/api/analyses \
 実行中のタスクをキャンセルし、ジョブと画像を削除する。成功は `204`。
 存在しない場合は `404`。
 
+### `GET /api/models`
+
+判定に使える vision モデルの一覧。接続先（`LLM_BASE_URL`）の `GET /models`
+を呼び出し、`architecture` で画像入力を明示的に表明しているモデルに絞って返す
+（vision の区分が取れない接続先では全部を返す）。結果はプロセス内に
+600 秒キャッシュし、取得に失敗した場合は 60 秒後に再取得する。
+
+```json
+{
+  "models": [
+    "nvidia/nemotron-3.5-super-vl:free",
+    "other-vision-model:free"
+  ],
+  "default": "nvidia/nemotron-3.5-super-vl:free"
+}
+```
+
+- 既定値（`LLM_MODEL`）は一覧の先頭に含めて返す。
+- 接続先の並びは、無料モデル（`pricing` の prompt / completion がともに 0）を
+  先頭に、以降は ID 順に並べ替えて返す（既定値が常に最初に来る点は変わらない）。
+- 接続先の一覧取得に失敗した場合も、既定値だけを返して 200 にする（UI が壊れない）。
+
 ### `GET /api/health`
 
 ```json
@@ -129,6 +165,8 @@ API キーなどの秘密情報は返さない。
 既定では OpenRouter（`https://openrouter.ai/api/v1`）の
 `nvidia/nemotron-3.5-super-vl:free` を使う。`LLM_API_KEY` に OpenRouter の
 API キーが必要。モデルと接続先は `LLM_MODEL` / `LLM_BASE_URL` で差し替えられる。
+判定リクエストに `model` が指定された場合は、そのモデルを使う（未指定なら
+`LLM_MODEL`）。モデルごとの `ChatOpenAI` はアナライザー内にキャッシュされる。
 
 モデルには次の構造を要求する。
 
@@ -179,7 +217,10 @@ uv run ruff check .
 
 - `tests/conftest.py` の `FakeAnalyzer` を注入するため、通常のテストは実 LLM を呼ばない。
 - API テストは `TestClient` の lifespan を起動し、バックグラウンド判定をポーリングする。
-- 対象: 正常系、部分失敗、入力検証、上限、404、削除、LLM 未設定、JSON フォールバック。
+- 対象: 正常系、部分失敗、入力検証、上限、404、削除、LLM 未設定、JSON フォールバック、
+  モデル指定（既定値・未登録モデルの 400・ジョブへのモデル記録）。
+- `tests/test_models.py` は fetch 関数を差し替えてモデル一覧の取得・キャッシュ・
+  フォールバックを検証する。実プロバイダへの接続は呼ばない。
 - 実モデルの確認は明示的に有効化する:
 
   ```bash
@@ -202,12 +243,16 @@ npm run build
 - `fetch` をモックし、アップロード→ポーリング→結果表示を検証する。
 - `URL.createObjectURL` は `src/test/setup.ts` でモックする。
 - 文言を変更したら `src/App.test.tsx` の日本語セレクタも更新する。
+- `fetch` モックの先頭は `GET /api/models`（マウント時のモデル一覧取得）が
+  消費するため、アップロード→ポーリングのモックはその後に並べる。
 
 ## トラブルシューティング
 
 | 症状 | 確認 |
 | --- | --- |
 | 判定 API が 503 | `.env` の `LLM_MODEL` が設定されているか、`/api/health` を確認 |
+| 判定 API が 400「対応していないモデル」 | UI のモデル選択と `/api/models` の一覧、`LLM_BASE_URL` を確認 |
+| モデル選択肢が既定の 1 つしかない | 接続先の `GET /models` が成功しているか。`.server.log` を見る |
 | 全画像がエラー | `LLM_BASE_URL`、`LLM_API_KEY`、モデルの vision 対応を確認。`.server.log` を見る |
 | OpenRouter で 401 / 403 | `LLM_API_KEY` に有効な OpenRouter のキーが設定されているか確認 |
 | 構造化出力で失敗する | `LLM_STRUCTURED_OUTPUT=json` を試す |

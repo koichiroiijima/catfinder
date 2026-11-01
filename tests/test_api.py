@@ -5,8 +5,17 @@ import os
 
 from PIL import Image
 
+from app.models import ModelCatalog
 from app.schemas import CatVerdict
 from tests.conftest import FakeAnalyzer, client_for, make_image, wait_for_completion
+
+
+async def fetch_two_models(base_url: str, api_key: str, timeout: float) -> list[str]:
+    return ["other-model", "third-model"]
+
+
+def _catalog(settings) -> ModelCatalog:
+    return ModelCatalog(settings, fetch=fetch_two_models)
 
 
 def _upload(name: str, data: bytes, media_type: str = "image/png"):
@@ -143,6 +152,79 @@ def test_rejects_oversized_file(settings):
         response = client.post("/api/analyses", files=[_upload("huge.png", data)])
         assert response.status_code == 413
         assert "大きすぎます" in response.json()["detail"]
+
+
+def test_list_models_reports_provider_catalog(settings):
+    with client_for(settings, FakeAnalyzer(), catalog=_catalog(settings)) as client:
+        response = client.get("/api/models")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["default"] == "test-vision-model"
+        assert payload["models"] == [
+            "test-vision-model",
+            "other-model",
+            "third-model",
+        ]
+
+
+def test_post_with_model_uses_requested_model(settings):
+    data = make_image()
+    analyzer = FakeAnalyzer(
+        verdicts={data: CatVerdict(has_cat=True, confidence=0.9, reason="猫。")}
+    )
+    with client_for(settings, analyzer, catalog=_catalog(settings)) as client:
+        response = client.post(
+            "/api/analyses",
+            data={"model": "other-model"},
+            files=[_upload("cat.png", data)],
+        )
+        assert response.status_code == 202
+
+        payload = wait_for_completion(client, response.json()["id"])
+        assert payload["model"] == "other-model"
+        assert analyzer.models == ["other-model"]
+
+
+def test_post_without_model_uses_default(settings):
+    data = make_image()
+    analyzer = FakeAnalyzer(
+        verdicts={data: CatVerdict(has_cat=True, confidence=0.9, reason="猫。")}
+    )
+    with client_for(settings, analyzer, catalog=_catalog(settings)) as client:
+        response = client.post("/api/analyses", files=[_upload("cat.png", data)])
+        assert response.status_code == 202
+
+        payload = wait_for_completion(client, response.json()["id"])
+        assert payload["model"] == "test-vision-model"
+        assert analyzer.models == ["test-vision-model"]
+
+
+def test_post_with_unknown_model_returns_400(settings):
+    data = make_image()
+    with client_for(settings, FakeAnalyzer(), catalog=_catalog(settings)) as client:
+        response = client.post(
+            "/api/analyses",
+            data={"model": "not-listed-model"},
+            files=[_upload("cat.png", data)],
+        )
+        assert response.status_code == 400
+        assert "対応していないモデル" in response.json()["detail"]
+
+
+def test_post_with_blank_model_falls_back_to_default(settings):
+    data = make_image()
+    analyzer = FakeAnalyzer(
+        verdicts={data: CatVerdict(has_cat=True, confidence=0.9, reason="猫。")}
+    )
+    with client_for(settings, analyzer, catalog=_catalog(settings)) as client:
+        response = client.post(
+            "/api/analyses",
+            data={"model": "  "},
+            files=[_upload("cat.png", data)],
+        )
+        assert response.status_code == 202
+        payload = wait_for_completion(client, response.json()["id"])
+        assert payload["model"] == "test-vision-model"
 
 
 def test_unknown_job_returns_404(settings):

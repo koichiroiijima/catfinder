@@ -23,6 +23,7 @@ React + Vite (frontend/)
 FastAPI (app/main.py)
   ├─ 画像検証・一時保存 (app/images.py)
   ├─ インメモリ Job (app/jobs.py)
+  ├─ モデル一覧の取得とキャッシュ (app/models.py)
   └─ LangChain ChatOpenAI (app/analyzer.py)
           │
           ▼
@@ -37,13 +38,17 @@ FastAPI (app/main.py)
 
 ## リクエストの流れ
 
-1. UI が選択画像を `FormData` の `files` フィールドで `POST /api/analyses` に送る。
-2. API が枚数・サイズ・実データ形式を検証し、ジョブディレクトリへ UUID 名で保存する。
-3. ジョブをメモリに登録し、`asyncio.create_task` で判定を開始して 202 を返す。
-4. 各画像はセマフォで同時実行数を制限しつつ、LLM に 1 枚ずつ問い合わせる。
-5. UI は 1 秒間隔で `GET /api/analyses/{id}` をポーリングする。
-6. 全画像が終端状態になるとジョブは `completed` になり、ポーリングが止まる。
-7. TTL を過ぎたジョブはバックグラウンドのクリーンアップで削除される。
+1. UI がマウント時に `GET /api/models` を 1 回呼び、選択可能な vision モデルと
+   既定値を取得する。
+2. UI が選択画像を `FormData` の `files` フィールドで、選択モデルを `model`
+   フィールドで `POST /api/analyses` に送る。
+3. API が枚数・サイズ・実データ形式を検証し、ジョブディレクトリへ UUID 名で保存する。
+4. ジョブをメモリに登録し、`asyncio.create_task` で判定を開始して 202 を返す。
+5. 各画像はセマフォで同時実行数を制限しつつ、ジョブのモデルに対応する
+   LLM クライアントで 1 枚ずつ問い合わせる。
+6. UI は 1 秒間隔で `GET /api/analyses/{id}` をポーリングする。
+7. 全画像が終端状態になるとジョブは `completed` になり、ポーリングが止まる。
+8. TTL を過ぎたジョブはバックグラウンドのクリーンアップで削除される。
 
 ## ジョブと画像の状態
 
@@ -71,16 +76,17 @@ pending ──> running ──> cat
 | --- | --- |
 | `app/main.py` | `create_app()`、ルーティング、リクエスト検証、レスポンス変換 |
 | `app/config.py` | `pydantic-settings` による環境変数読み込み |
+| `app/models.py` | 接続先 `/models` からの vision モデル一覧取得、キャッシュ、許可判定 |
 | `app/images.py` | 実データ検証、表示用ファイル名の無害化、一時保存 |
-| `app/analyzer.py` | LangChain メッセージ構築、構造化出力、JSON フォールバック |
+| `app/analyzer.py` | LangChain メッセージ構築、構造化出力、JSON フォールバック、モデル別クライアントのキャッシュ |
 | `app/jobs.py` | ジョブ登録、並列実行、集計、削除、TTL クリーンアップ |
 | `app/schemas.py` | API と LLM 出力の Pydantic モデル |
 | `frontend/src/api.ts` | HTTP クライアントとエラー整形 |
 | `frontend/src/useAnalysis.ts` | アップロード、ポーリング、エラー状態 |
-| `frontend/src/App.tsx` | 画面状態、ファイル選択、フィルタ |
+| `frontend/src/App.tsx` | 画面状態、ファイル選択、モデル選択、フィルタ |
 
-`create_app(settings, analyzer)` はテスト用の注入点である。
-本番では `create_analyzer(settings)` が `LangChainCatAnalyzer` を組み立てる。
+`create_app(settings, analyzer, catalog)` はテスト用の注入点である。
+本番では `create_analyzer(settings)` が `MultiModelCatAnalyzer` を組み立てる。
 既定の接続先は OpenRouter で、モデルは `nvidia/nemotron-3.5-super-vl:free`。
 `LLM_BASE_URL` / `LLM_MODEL` を上書きすれば他の OpenAI 互換 API に差し替えられる。
 `LLM_MODEL` が空の場合はアナライザーが `None` になり、判定 API は 503 を返す。
@@ -102,6 +108,13 @@ ChatOpenAI(
   `nvidia/nemotron-3.5-super-vl:free`。`LLM_API_KEY` に OpenRouter のキーが必要。
 - モデルを差し替える場合は `LLM_MODEL` を変更する。接続先も変える場合は
   `LLM_BASE_URL` / `LLM_API_KEY` を併せて上書きする。
+- `LLM_MODEL` は「モデル選択が無い／失敗したときの既定値」であり、
+  UI の「判定モデル」ではリクエストごとにモデルを上書きできる。
+- モデル 1 つにつき `ChatOpenAI` を 1 個生成し、`MultiModelCatAnalyzer` が
+  プロセス内にキャッシュする。判定構造（プロンプト・構造化出力）はモデル間で共有する。
+- 選択肢の並び順は、無料モデルを先頭・以降 ID 順に並べ替える（既定値は常に最初）。
+  vision 判定は `architecture` が存在しない接続先では保留（全部返す）、存在する
+  場合は画像入力を明示的に表明するモデルのみ残す。
 - 画像は LangChain の標準 content block
   `{"type": "image", "base64": ..., "mime_type": ...}` で渡す。
 - 出力は `CatVerdict`（`has_cat`, `confidence`, `reason`）に固定する。
@@ -135,6 +148,10 @@ ChatOpenAI(
 
 - 選択ファイルは `SelectedImage`（`File` + object URL）として保持する。
 - object URL は追加時に生成し、削除・リセット・アンマウント時に明示的に revoke する。
+- モデル一覧はマウント時の 1 リクエストで取得する。失敗時はセレクトボックスを
+  隠して既定モデルに任せ、UI エラーにはしない。
+- 選択モデルは送信時に `POST /api/analyses` の `model` フィールドへ渡す。
+  結果画面はジョブが実際に使った `model` を表示する。
 - アップロード後はサーバーが返す画像 URL を表示する。
 - ポーリングは `AbortController` と `setTimeout` で管理し、ジョブ変更・
   アンマウント時に停止する。

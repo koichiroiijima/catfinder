@@ -20,6 +20,7 @@ export interface AnalysisSummary {
   cat_count: number
   no_cat_count: number
   error_count: number
+  model: string | null
   images: ImageResult[]
 }
 
@@ -39,6 +40,19 @@ export class ApiError extends Error {
   }
 }
 
+export interface ModelsResponse {
+  models: string[]
+  default: string
+}
+
+export async function fetchModels(signal?: AbortSignal): Promise<ModelsResponse> {
+  const response = await fetch('/api/models', { signal })
+  if (!response.ok) {
+    throw new ApiError(await errorDetail(response), response.status)
+  }
+  return (await response.json()) as ModelsResponse
+}
+
 async function errorDetail(response: Response): Promise<string> {
   try {
     const payload = (await response.json()) as { detail?: unknown }
@@ -51,10 +65,16 @@ async function errorDetail(response: Response): Promise<string> {
   return `サーバーでエラーが発生しました（${response.status}）。`
 }
 
-export async function createAnalysis(files: File[]): Promise<AnalysisCreated> {
+export async function createAnalysis(
+  files: File[],
+  model: string | null,
+): Promise<AnalysisCreated> {
   const form = new FormData()
   for (const file of files) {
     form.append('files', file, file.name)
+  }
+  if (model !== null && model !== '') {
+    form.append('model', model)
   }
 
   const response = await fetch('/api/analyses', {

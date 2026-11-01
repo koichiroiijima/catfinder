@@ -32,7 +32,13 @@ Do not wrap it in Markdown fences.
 
 
 class CatAnalyzer(Protocol):
-    async def analyze(self, path: Path, media_type: str) -> CatVerdict: ...
+    async def analyze(
+        self,
+        path: Path,
+        media_type: str,
+        *,
+        model: str | None = None,
+    ) -> CatVerdict: ...
 
 
 class AnalyzerConfigurationError(RuntimeError):
@@ -138,24 +144,60 @@ class LangChainCatAnalyzer:
         return parse_verdict_text(message_text(message))
 
 
-def create_analyzer(settings: Settings) -> LangChainCatAnalyzer | None:
+def create_analyzer(settings: Settings) -> MultiModelCatAnalyzer | None:
     """Build the configured analyzer, or None when no model is configured."""
     if not settings.llm_configured:
         return None
+    return MultiModelCatAnalyzer(settings, mode=settings.llm_structured_output)
 
-    kwargs: dict[str, object] = {
-        "model": settings.llm_model,
-        "api_key": settings.llm_api_key,
-        "timeout": settings.llm_timeout_seconds,
-        "max_retries": settings.llm_max_retries,
-        "temperature": 0,
-    }
-    if settings.llm_base_url:
-        kwargs["base_url"] = settings.llm_base_url
 
-    try:
-        model = ChatOpenAI(**kwargs)  # type: ignore[arg-type]
-    except Exception as exc:  # pragma: no cover - depends on client validation
-        raise AnalyzerConfigurationError(f"LLM クライアントを作成できません: {exc}") from exc
+class MultiModelCatAnalyzer:
+    """Dispatch each request to a cached per-model analyzer.
 
-    return LangChainCatAnalyzer(model, mode=settings.llm_structured_output)
+    The default model (from ``LLM_MODEL``) is used whenever a request does
+    not name one. Structured-output settings apply equally to every model.
+    """
+
+    def __init__(self, settings: Settings, *, mode: str = "auto") -> None:
+        if mode not in {"auto", "function_calling", "json_schema", "json"}:
+            raise ValueError(f"Unsupported structured output mode: {mode}")
+        self._settings = settings
+        self._mode = mode
+        self._analyzers: dict[str, LangChainCatAnalyzer] = {}
+
+    async def analyze(
+        self,
+        path: Path,
+        media_type: str,
+        *,
+        model: str | None = None,
+    ) -> CatVerdict:
+        name = model if model is not None else self._settings.llm_model
+        analyzer = self._analyzer_for(name)
+        return await analyzer.analyze(path, media_type)
+
+    def _analyzer_for(self, model: str) -> LangChainCatAnalyzer:
+        existing = self._analyzers.get(model)
+        if existing is not None:
+            return existing
+
+        kwargs: dict[str, object] = {
+            "model": model,
+            "api_key": self._settings.llm_api_key,
+            "timeout": self._settings.llm_timeout_seconds,
+            "max_retries": self._settings.llm_max_retries,
+            "temperature": 0,
+        }
+        if self._settings.llm_base_url:
+            kwargs["base_url"] = self._settings.llm_base_url
+
+        try:
+            chat_model = ChatOpenAI(**kwargs)  # type: ignore[arg-type]
+        except Exception as exc:
+            raise AnalyzerConfigurationError(
+                f"LLM クライアントを作成できません: {exc}"
+            ) from exc
+
+        analyzer = LangChainCatAnalyzer(chat_model, mode=self._mode)
+        self._analyzers[model] = analyzer
+        return analyzer

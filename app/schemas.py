@@ -67,6 +67,7 @@ class AnalysisSummary(BaseModel):
     cat_count: int
     no_cat_count: int
     error_count: int
+    model: str | None = None
     images: list[ImageResult]
 
 
@@ -74,6 +75,13 @@ class AnalysisCreated(BaseModel):
     id: str
     status: AnalysisStatus
     total: int
+
+
+class ModelsResponse(BaseModel):
+    """Vision models offered by the configured OpenAI-compatible provider."""
+
+    models: list[str]
+    default: str
 
 
 class HealthResponse(BaseModel):

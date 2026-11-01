@@ -4,6 +4,10 @@ mode: subagent
 model: openrouter/nvidia/nemotron-3.5-lightning:free
 color: "#2f8a5b"
 permissions:
+  # 最後にマッチしたルールが優先されるため、broad な拒否を先に書く
+  - action: "*"
+    resource: "*"
+    effect: deny
   - action: read
     resource: "*"
     effect: allow
@@ -16,15 +20,6 @@ permissions:
   - action: skill
     resource: "commit"
     effect: allow
-  - action: subagent
-    resource: "*"
-    effect: deny
-  - action: edit
-    resource: "*"
-    effect: deny
-  - action: shell
-    resource: "*"
-    effect: deny
   - action: shell
     resource: "git status*"
     effect: allow

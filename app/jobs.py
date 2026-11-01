@@ -41,6 +41,7 @@ class AnalysisJob:
     id: str
     directory: Path
     created_at: float
+    model: str | None = None
     status: AnalysisStatus = AnalysisStatus.QUEUED
     images: list[JobImage] = field(default_factory=list)
     task: asyncio.Task[None] | None = None
@@ -79,7 +80,7 @@ class AnalysisService:
     def analyzer_available(self) -> bool:
         return self._analyzer is not None
 
-    def new_job(self) -> AnalysisJob:
+    def new_job(self, model: str | None = None) -> AnalysisJob:
         job_id = uuid.uuid4().hex
         directory = self._root / job_id
         directory.mkdir(parents=True, exist_ok=False)
@@ -87,6 +88,7 @@ class AnalysisService:
             id=job_id,
             directory=directory,
             created_at=time.monotonic(),
+            model=model,
         )
         self._jobs[job_id] = job
         return job
@@ -131,7 +133,11 @@ class AnalysisService:
                 item.error = "LLM が設定されていません。"
                 return
             try:
-                verdict = await self._analyzer.analyze(item.path, item.media_type)
+                verdict = await self._analyzer.analyze(
+                    item.path,
+                    item.media_type,
+                    model=job.model,
+                )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -170,6 +176,7 @@ class AnalysisService:
             cat_count=cat_count,
             no_cat_count=no_cat_count,
             error_count=error_count,
+            model=job.model,
             images=images,
         )
 

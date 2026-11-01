@@ -5,6 +5,9 @@ interface UploadPanelProps {
   previews: string[]
   starting: boolean
   disabled: boolean
+  models: string[] | null
+  model: string | null
+  onModelChange: (model: string) => void
   onAdd: (files: File[]) => void
   onRemove: (index: number) => void
   onStart: () => void
@@ -22,6 +25,9 @@ export function UploadPanel({
   previews,
   starting,
   disabled,
+  models,
+  model,
+  onModelChange,
   onAdd,
   onRemove,
   onStart,
@@ -104,6 +110,24 @@ export function UploadPanel({
             </li>
           ))}
         </ul>
+      )}
+
+      {models !== null && models.length > 0 && (
+        <div className="model-select">
+          <label htmlFor="model-select">判定モデル</label>
+          <select
+            id="model-select"
+            value={model ?? models[0]}
+            disabled={disabled}
+            onChange={(event) => onModelChange(event.target.value)}
+          >
+            {models.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </select>
+        </div>
       )}
 
       <div className="actions">

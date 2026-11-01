@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { deleteAnalysis } from './api'
+import { deleteAnalysis, fetchModels } from './api'
 import { ResultGrid } from './components/ResultGrid'
 import { SummaryBar, type ResultFilter } from './components/SummaryBar'
 import { UploadPanel } from './components/UploadPanel'
@@ -24,8 +24,26 @@ export default function App() {
   const [selected, setSelected] = useState<SelectedImage[]>([])
   const [filter, setFilter] = useState<ResultFilter>('all')
   const [clientError, setClientError] = useState<string | null>(null)
+  const [models, setModels] = useState<string[] | null>(null)
+  const [model, setModel] = useState<string | null>(null)
   const selectedRef = useRef<SelectedImage[]>([])
   const { jobId, summary, error, starting, start, reset } = useAnalysis()
+
+  useEffect(() => {
+    const controller = new AbortController()
+    fetchModels(controller.signal)
+      .then((catalog) => {
+        setModels(catalog.models)
+        setModel((current) => current ?? catalog.default)
+      })
+      .catch(() => {
+        // Without a catalog the select stays hidden and the server falls
+        // back to the configured model.
+      })
+    return () => {
+      controller.abort()
+    }
+  }, [])
 
   const files = useMemo(() => selected.map((item) => item.file), [selected])
   const previews = useMemo(() => selected.map((item) => item.preview), [selected])
@@ -112,7 +130,7 @@ export default function App() {
     }
     setFilter('all')
     setClientError(null)
-    await start(files)
+    await start(files, model)
   }
 
   const handleReset = async () => {
@@ -158,6 +176,9 @@ export default function App() {
             previews={previews}
             starting={starting}
             disabled={starting}
+            models={models}
+            model={model}
+            onModelChange={setModel}
             onAdd={addFiles}
             onRemove={removeFile}
             onStart={handleStart}
@@ -172,6 +193,7 @@ export default function App() {
                     ? 'アップロードを受け付けました。判定を開始しています…'
                     : `${summary.completed} / ${summary.total} 枚を判定しました。`}
                 </p>
+                {summary?.model && <p className="model-used">判定モデル: {summary.model}</p>}
               </div>
               <button type="button" className="secondary" onClick={handleReset}>
                 別の画像で判定

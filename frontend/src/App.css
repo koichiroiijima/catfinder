@@ -220,7 +220,33 @@ button.secondary:hover:not(:disabled) {
 .actions {
   display: flex;
   justify-content: flex-end;
+  gap: 12px;
   margin-top: 20px;
+}
+
+.model-select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.model-select label {
+  font-size: 13px;
+  color: var(--muted, #666);
+}
+
+.model-select select {
+  padding: 6px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 8px;
+  font-size: 13px;
+  background: #fff;
+}
+
+.model-used {
+  font-size: 13px;
+  color: var(--muted, #666);
 }
 
 .results-heading {

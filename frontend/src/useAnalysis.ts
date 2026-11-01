@@ -21,7 +21,7 @@ export interface AnalysisController {
   summary: AnalysisSummary | null
   error: string | null
   starting: boolean
-  start: (files: File[]) => Promise<void>
+  start: (files: File[], model: string | null) => Promise<void>
   reset: () => void
 }
 
@@ -31,12 +31,12 @@ export function useAnalysis(): AnalysisController {
   const [error, setError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
 
-  const start = useCallback(async (files: File[]) => {
+  const start = useCallback(async (files: File[], model: string | null) => {
     setStarting(true)
     setError(null)
     setSummary(null)
     try {
-      const created = await createAnalysis(files)
+      const created = await createAnalysis(files, model)
       setJobId(created.id)
     } catch (caught) {
       setError(errorMessage(caught))

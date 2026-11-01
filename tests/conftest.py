@@ -12,6 +12,7 @@ from PIL import Image
 
 from app.config import Settings
 from app.main import create_app
+from app.models import ModelCatalog
 from app.schemas import CatVerdict
 
 
@@ -35,11 +36,19 @@ class FakeAnalyzer:
         self.verdicts = verdicts or {}
         self.failures = failures or set()
         self.calls: list[bytes] = []
+        self.models: list[str | None] = []
 
-    async def analyze(self, path, media_type: str) -> CatVerdict:
+    async def analyze(
+        self,
+        path,
+        media_type: str,
+        *,
+        model: str | None = None,
+    ) -> CatVerdict:
         await asyncio.sleep(0.01)
         data = path.read_bytes()
         self.calls.append(data)
+        self.models.append(model)
         if data in self.failures:
             raise RuntimeError("model exploded")
         return self.verdicts[data]
@@ -59,8 +68,12 @@ def settings(tmp_path) -> Settings:
 
 
 @contextmanager
-def client_for(settings: Settings, analyzer) -> Iterator[TestClient]:
-    with TestClient(create_app(settings, analyzer)) as client:
+def client_for(
+    settings: Settings,
+    analyzer,
+    catalog: ModelCatalog | None = None,
+) -> Iterator[TestClient]:
+    with TestClient(create_app(settings, analyzer, catalog)) as client:
         yield client
 
 

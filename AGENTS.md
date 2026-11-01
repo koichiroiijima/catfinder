@@ -51,6 +51,9 @@ scripts/ui.sh start|stop|restart|status       # UI : 5173
 - `auto-committer` (`.opencode/agents/auto-committer.md`):
   呼び出された時点の未コミット変更を `commit` スキルでコミットする。
   ファイル編集・`git push`・ブランチ操作は行わない。
+- `script-runner` (`.opencode/agents/script-runner.md`):
+  `scripts/server.sh` / `scripts/ui.sh` の実行専用。start / stop / restart /
+  status を引数の通りに実行して結果を報告する。解析・ファイル編集はしない。
 
 ## 変更時の注意
 

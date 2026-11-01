@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage
 
 from app.analyzer import (
     LangChainCatAnalyzer,
+    MultiModelCatAnalyzer,
     build_messages,
     create_analyzer,
     message_text,
@@ -80,7 +81,19 @@ def test_parse_verdict_normalizes_percentage_and_clamps():
 def test_create_analyzer_requires_a_model():
     assert create_analyzer(Settings(_env_file=None, llm_model="")) is None
     analyzer = create_analyzer(Settings(_env_file=None))
-    assert isinstance(analyzer, LangChainCatAnalyzer)
+    assert isinstance(analyzer, MultiModelCatAnalyzer)
+
+
+def test_multi_model_analyzer_caches_one_chat_model_per_name():
+    analyzer = create_analyzer(Settings(_env_file=None))
+
+    first = analyzer._analyzer_for("model-a")
+    second = analyzer._analyzer_for("model-a")
+    other = analyzer._analyzer_for("model-b")
+
+    assert first is second
+    assert first is not other
+    assert all(isinstance(item, LangChainCatAnalyzer) for item in (first, other))
 
 
 def test_default_model_targets_openrouter():

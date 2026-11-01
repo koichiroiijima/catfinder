@@ -3,7 +3,12 @@
 ## 現状
 
 - FastAPI + LangChain（`ChatOpenAI`）のバックエンドと、React + Vite の UI を実装済み。
-- バックエンド 20 テスト、フロントエンド 4 テストが成功。実 LLM の結合テスト 1 件は既定でスキップ。
+- バックエンド 35 テスト（モデル一覧・モデル指定を含む）、フロントエンド 7 テストが成功。
+  実 LLM の結合テスト 1 件は既定でスキップ。
+- 判定ごとのモデル選択を実装済み。`GET /api/models` が接続先の `/models` から
+  vision 対応モデルを取得し（600 秒キャッシュ、失敗時は既定 1 つにフォールバック）、
+  UI の「判定モデル」セレクトボックス → `POST /api/analyses` の `model` フィールド
+  でジョブごとに使用モデルを切り替えられる。
 - `npm run build`、`npm run lint`、`uv run ruff check .` が成功。
 - `scripts/server.sh` / `scripts/ui.sh` で起動・停止を確認済み。
 - `/api/health` と Vite proxy 経由の `/api/health` を確認済み。
@@ -20,6 +25,10 @@
   で確認できる。
 - 採用モデルが `json_schema` 構造化出力に対応しているか。
   未対応の場合は `LLM_STRUCTURED_OUTPUT=json` を試す。
+- OpenRouter の実 `/api/models` に対する `GET /api/models`（vision フィルタの
+  退屈なケース・フリーモデルの並び順）は未検証。モックでのみ確認済み。
+- 選択した別モデルでの実判定。モデルごとの応答特性（confidence の単位や
+  構造化出力対応）はモデル依存のため、実キーでの確認が必要。
 - 実ブラウザでのドラッグ＆ドロップと大量画像時の操作性。
 
 ## 次の候補

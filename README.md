@@ -9,6 +9,7 @@ React + Vite の UI が進捗と結果を表示します。
 - 複数画像をまとめてアップロードし、画像ごとに「猫あり / 猫なし / エラー」を表示
 - 既定で OpenRouter の vision モデルを使用。OpenAI 互換 API であれば
   OpenAI・Ollama・vLLM・LiteLLM などを `LLM_BASE_URL` / `LLM_MODEL` で切り替え可能
+- 判定ごとに vision モデルを選択可能（選択肢は `/api/models` で提供元から自動取得）
 - 結果の絞り込み、件数集計、判定理由・確信度の表示
 - 1 枚の判定が失敗しても、残りの画像の判定は継続
 - 履歴は持たず、結果と画像は一定時間後に自動削除（ローカル利用向け）
@@ -51,6 +52,9 @@ LLM_API_KEY=not-needed
 LLM_MODEL=your-vision-model
 ```
 
+`LLM_MODEL` は「判定 UI でモデルを選ばなかったときの既定値」になります。
+UI では判定のたびに、接続先が `/models` で提供する vision 対応モデルから選べます。
+
 ## 起動
 
 ```bash
@@ -83,10 +87,11 @@ scripts/ui.sh status
 ## 使い方
 
 1. 画像をドラッグ＆ドロップ、または「ファイルを選択」から追加
-2. 「判定する」を押す
-3. 進捗バーと件数が更新され、完了後に結果カードが表示される
-4. 「すべて / 猫あり / 猫なし / エラー」で絞り込む
-5. 「別の画像で判定」でサーバー上の結果を削除して最初に戻る
+2. 「判定モデル」で使用する vision モデルを選ぶ（省略時は `LLM_MODEL`）
+3. 「判定する」を押す
+4. 進捗バーと件数が更新され、完了後に結果カードが表示される
+5. 「すべて / 猫あり / 猫なし / エラー」で絞り込む
+6. 「別の画像で判定」でサーバー上の結果を削除して最初に戻る
 
 対応形式は JPEG / PNG / WebP、最大 50 枚・1 枚 15MB です。
 LLM の確信度はモデルの自己申告値であり、校正された確率ではありません。
@@ -95,10 +100,11 @@ LLM の確信度はモデルの自己申告値であり、校正された確率�
 
 | メソッド | パス | 説明 |
 | --- | --- | --- |
-| `POST` | `/api/analyses` | 複数画像を受け取り、判定ジョブを開始（202） |
+| `POST` | `/api/analyses` | 複数画像と任意の `model` を受け取り、判定ジョブを開始（202） |
 | `GET` | `/api/analyses/{id}` | 進捗と画像ごとの判定結果 |
 | `GET` | `/api/analyses/{id}/images/{image_id}` | 結果表示用の画像 |
 | `DELETE` | `/api/analyses/{id}` | ジョブと画像を削除（204） |
+| `GET` | `/api/models` | 選択可能な vision モデルの一覧と既定値 |
 | `GET` | `/api/health` | 稼働状況と LLM 設定有無 |
 
 詳細な仕様は [docs/details.md](docs/details.md)、設計は
@@ -111,7 +117,7 @@ Swagger UI は API 起動中に http://127.0.0.1:8000/docs で確認できます
 | --- | --- | --- |
 | `LLM_BASE_URL` | `https://openrouter.ai/api/v1` | OpenAI 互換 API のベース URL |
 | `LLM_API_KEY` | `not-needed` | API キー。OpenRouter では必須 |
-| `LLM_MODEL` | `nvidia/nemotron-3.5-super-vl:free` | vision 対応モデル名。空にすると判定 API が 503 |
+| `LLM_MODEL` | `nvidia/nemotron-3.5-super-vl:free` | 既定の vision モデル名。空にすると判定 API が 503 |
 | `LLM_TIMEOUT_SECONDS` | `60` | 1 枚あたりのタイムアウト |
 | `LLM_MAX_RETRIES` | `2` | LangChain 側のリトライ回数 |
 | `LLM_CONCURRENCY` | `4` | 同時に判定する画像数 |
@@ -148,7 +154,8 @@ npm run build
 app/
   main.py       FastAPI の組み立てとルーティング
   config.py     環境変数
-  analyzer.py   LangChain による画像判定
+  models.py     判定モデル一覧の取得とキャッシュ
+  analyzer.py   LangChain による画像判定（モデルごとにクライアントをキャッシュ）
   jobs.py       インメモリのジョブ管理・並列実行・TTL 削除
   images.py     画像検証と保存
   schemas.py    API / LLM 出力の型
