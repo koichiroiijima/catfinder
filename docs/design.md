@@ -38,18 +38,19 @@ FastAPI (app/main.py)
 
 ## リクエストの流れ
 
-1. UI がマウント時に `GET /api/models` を 1 回呼び、選択可能な vision モデルと
-   既定値を取得する。
+1. UI がマウント時に `GET /api/models` を 1 回呼び、選択可能な
+   vision + Structured Output 対応モデルと既定値を取得する。
 2. UI が選択画像を `FormData` の `files` フィールドで、選択モデルを `model`
    フィールドで、任意の API パラメータを `reasoning_effort` / `temperature` /
    `max_tokens` フィールドで `POST /api/analyses` に送る。
 3. API が枚数・サイズ・実データ形式・パラメータを検証し、ジョブディレクトリへ
    UUID 名で保存する。
 4. ジョブをメモリに登録し、`asyncio.create_task` で判定を開始して 202 を返す。
-5. 各画像はセマフォで同時実行数を制限しつつ、ジョブのモデルとパラメータに
-   対応する LLM クライアントで 1 枚ずつ問い合わせる。
+5. 各画像はセマフォで同時実行数（既定 8）を制限しつつ、ジョブのモデルと
+   パラメータに対応する LLM クライアントで 1 枚ずつ並列に問い合わせる。
 6. 判定結果と一緒に、プロバイダが返したトークン使用量を画像ごとに記録する。
-7. UI は 1 秒間隔で `GET /api/analyses/{id}` をポーリングする。
+7. UI は 1 秒間隔で `GET /api/analyses/{id}` をポーリングし、進捗と
+   残り時間の概算を受け取る。
 8. 全画像が終端状態になるとジョブは `completed` になり、ポーリングが止まる。
 9. TTL を過ぎたジョブはバックグラウンドのクリーンアップで削除される。
 
@@ -73,16 +74,25 @@ pending ──> running ──> cat
 - `completed` は「全画像が終端状態になった」ことを意味し、成功だけを意味しない。
 - `error_count` と `completed`（終端状態の数）を分けて返す。
 
+## 残り時間の概算
+
+- `AnalysisJob.started_at` を判定開始時に記録する。
+- `eta_seconds = 経過秒 / 完了枚数 × 残り枚数` を超概算として返す。
+  同時実行数による短縮は、完了枚数の伸びとして自然に反映される。
+- 完了 0 枚、または全画像が終端状態のときは `null`。
+- 画像ごとの処理時間差やレート制限の影響で変動する。UI では「概算」と明示し、
+  計算できない間は「計算中…」と表示する。
+
 ## モジュールの責務
 
 | ファイル | 責務 |
 | --- | --- |
 | `app/main.py` | `create_app()`、ルーティング、リクエスト検証（API パラメータ含む）、レスポンス変換 |
 | `app/config.py` | `pydantic-settings` による環境変数読み込み |
-| `app/models.py` | 接続先 `/models` からの vision モデル一覧取得、キャッシュ、許可判定 |
+| `app/models.py` | 接続先 `/models` からの vision + Structured Output 対応モデル一覧取得、キャッシュ、許可判定 |
 | `app/images.py` | 実データ検証、表示用ファイル名の無害化、一時保存 |
-| `app/analyzer.py` | LangChain メッセージ構築、構造化出力、JSON フォールバック、モデル・パラメータ別クライアントのキャッシュ、usage 抽出 |
-| `app/jobs.py` | ジョブ登録、並列実行、集計（usage 含む）、削除、TTL クリーンアップ |
+| `app/analyzer.py` | LangChain メッセージ構築、`json_schema` 構造化出力、モデル・パラメータ別クライアントのキャッシュ、usage 抽出 |
+| `app/jobs.py` | ジョブ登録、並列実行、集計（usage・残り時間含む）、削除、TTL クリーンアップ |
 | `app/schemas.py` | API と LLM 出力の Pydantic モデル（`ChatOptions` / `TokenUsage` 含む） |
 | `frontend/src/api.ts` | HTTP クライアント、API パラメータの送信、エラー整形 |
 | `frontend/src/useAnalysis.ts` | アップロード（API パラメータ含む）、ポーリング、エラー状態 |
@@ -115,28 +125,32 @@ ChatOpenAI(
   `LLM_BASE_URL` / `LLM_API_KEY` を併せて上書きする。
 - `LLM_MODEL` は「モデル選択が無い／失敗したときの既定値」であり、
   UI の「判定モデル」ではリクエストごとにモデルを上書きできる。
+  `LLM_MODEL` が Structured Output 対応モデルの一覧に無い場合は、一覧の先頭を
+  既定値として使う。
 - UI の「詳細設定」で `reasoning_effort` / `temperature` / `max_tokens` を
   リクエストごとに指定できる。未指定時は temperature 0、それ以外は
   プロバイダ既定を使う。
 - `ChatOpenAI` はモデルと実効パラメータ（推論の強さ・temperature・max_tokens）
   の組ごとに 1 個生成し、`MultiModelCatAnalyzer` がプロセス内にキャッシュする。
   判定構造（プロンプト・構造化出力）はモデル間で共有する。
-- 選択肢の並び順は、無料モデルを先頭・以降 ID 順に並べ替える（既定値は常に最初）。
-  vision 判定は `architecture` が存在しない接続先では保留（全部返す）、存在する
-  場合は画像入力を明示的に表明するモデルのみ残す。
+- 選択肢の並び順は、無料モデルを先頭・以降 ID 順に並べ替える（既定値が一覧に
+  含まれる場合は常に最初）。vision 判定は `architecture` が存在しない接続先では
+  保留（全部返す）、存在する場合は画像入力を明示的に表明するモデルのみ残す。
+- Structured Output 判定は `supported_parameters` の `structured_outputs` を
+  見る。メタデータが無い接続先では保留（全部返す）。OpenRouter 接続時は
+  `extra_body={"provider": {"require_parameters": True}}` を送り、要求した
+  パラメータ（Structured Output を含む）に対応する endpoint のみにルーティングする。
 - 画像は LangChain の標準 content block
   `{"type": "image", "base64": ..., "mime_type": ...}` で渡す。
-- 出力は `CatVerdict`（`has_cat`, `confidence`, `reason`）に固定する。
-- `LLM_STRUCTURED_OUTPUT=auto`（既定）は `json_schema` を試し、例外時に
-  JSON 応答をパースする方式へフォールバックする。OpenAI 互換サーバーの
-  構造化出力対応差を吸収するため。
+- 出力は `CatVerdict`（`has_cat`, `confidence`, `reason`）に固定し、常に
+  `with_structured_output(..., method="json_schema")` で受け取る。自由形式の
+  JSON 応答をパースするフォールバックは持たない。非対応のモデル・endpoint では
+  その画像がエラーになる（モデル一覧で事前に除外する）。
 - `reason` は日本語で返すようプロンプトで指示する。
 - `confidence` は 0–1 を基本とするが、0–100 や `"87%"` で返る場合も
   正規化して受け入れる。
 - 構造化出力は `include_raw=True` で呼び、raw の `AIMessage.usage_metadata` から
-  input / output / total / reasoning トークンを取得する。JSON 応答モードも同じ。
-- `LLM_STRUCTURED_OUTPUT=auto` で JSON フォールバックした場合は、構造化出力の
-  試行とフォールバックの usage を合算する。失敗した試行でもトークンを消費するため。
+  input / output / total / reasoning トークンを取得する。
 - OpenRouter の `usage.cost` は raw の
   `response_metadata["token_usage"]["cost"]` から取得し、ジョブ合計に加算する。
 - usage は判定に成功した画像のみ集計する。プロバイダが返さない場合は `null` にし、
@@ -147,15 +161,16 @@ ChatOpenAI(
 
 - 拡張子や `Content-Type` は信用せず、Pillow でデコードして形式を判定する。
 - 対応形式は JPEG / PNG / WebP。
-- 上限は 1 枚 15MB（`MAX_FILE_MB`）、4000 万画素、1 リクエスト 50 枚（`MAX_FILES`）。
+- 上限は 1 枚 15MB（`MAX_FILE_MB`）、4000 万画素、1 リクエスト 500 枚（`MAX_FILES`）。
 - 保存名は UUID。元のファイル名は表示専用で、パスには使わない。
 - `UPLOAD_DIR` 未指定時は `tempfile.mkdtemp(prefix="catfinder-")` を使う。
 - 結果表示のため、画像はジョブ削除または TTL まで保持する。
 
 ## 並列性とクリーンアップ
 
-- `asyncio.Semaphore(LLM_CONCURRENCY)` で LLM 呼び出しを制限する。
-- ジョブ内の画像は `asyncio.gather` で並列処理する。
+- `asyncio.Semaphore(LLM_CONCURRENCY)` で LLM 呼び出しを制限する（既定 8）。
+- ジョブ内の画像は `asyncio.gather` で並列処理する。全件を一斉送信せず、
+  セマフォで実際の HTTP リクエスト数を抑える。
 - タイムアウトとリトライは LangChain / OpenAI クライアント側の設定に委ねる。
 - クリーンアップはアプリ起動時の lifespan で開始し、TTL の半分（5–60 秒）ごとに
   期限切れジョブを削除する。
@@ -174,6 +189,8 @@ ChatOpenAI(
   「詳細設定」は折りたたみで、既定は閉じた状態にする。
 - 結果画面はジョブが実際に使ったパラメータと、合計トークン数（取得できた場合は
   コスト）を表示する。画像ごとの使用量は API では返さず、ジョブ合計のみ扱う。
+- 判定中はサーバーが返す `eta_seconds` を「残り時間: 約 X 分（概算）」として
+  表示する。未算出時は「計算中…」、完了後は非表示にする。
 - アップロード後はサーバーが返す画像 URL を表示する。
 - ポーリングは `AbortController` と `setTimeout` で管理し、ジョブ変更・
   アンマウント時に停止する。

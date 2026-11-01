@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import base64
-import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import urlparse
 
 from langchain.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -25,11 +25,7 @@ Give confidence between 0 and 1. Write the reason in Japanese, in one or two
 short sentences. Follow the requested output schema exactly.
 """
 
-JSON_INSTRUCTION = """\
-Is there a cat in this image? Reply with only a JSON object like:
-{"has_cat": true, "confidence": 0.87, "reason": "日本語の短い理由"}
-Do not wrap it in Markdown fences.
-"""
+OPENROUTER_HOST = "openrouter.ai"
 
 
 @dataclass(slots=True)
@@ -90,40 +86,19 @@ def _response_cost(message: object) -> float | None:
     return float(cost)
 
 
-def merge_usage(first: TokenUsage | None, second: TokenUsage | None) -> TokenUsage | None:
-    """Sum usage from a structured attempt and its JSON fallback."""
-    if first is None:
-        return second
-    if second is None:
-        return first
-
-    reasoning = [
-        value
-        for value in (first.reasoning_tokens, second.reasoning_tokens)
-        if value is not None
-    ]
-    costs = [value for value in (first.cost, second.cost) if value is not None]
-    return TokenUsage(
-        input_tokens=first.input_tokens + second.input_tokens,
-        output_tokens=first.output_tokens + second.output_tokens,
-        total_tokens=first.total_tokens + second.total_tokens,
-        reasoning_tokens=sum(reasoning) if reasoning else None,
-        cost=sum(costs) if costs else None,
-    )
+def is_openrouter(base_url: str | None) -> bool:
+    if not base_url:
+        return False
+    host = urlparse(base_url).hostname or ""
+    return host == OPENROUTER_HOST or host.endswith(f".{OPENROUTER_HOST}")
 
 
-def build_messages(
-    data: bytes,
-    media_type: str,
-    *,
-    json_mode: bool = False,
-) -> list[SystemMessage | HumanMessage]:
-    text = JSON_INSTRUCTION if json_mode else "Is there a cat in this image?"
+def build_messages(data: bytes, media_type: str) -> list[SystemMessage | HumanMessage]:
     return [
         SystemMessage(content=SYSTEM_PROMPT),
         HumanMessage(
             content=[
-                {"type": "text", "text": text},
+                {"type": "text", "text": "Is there a cat in this image?"},
                 {
                     "type": "image",
                     "base64": base64.b64encode(data).decode("ascii"),
@@ -134,130 +109,59 @@ def build_messages(
     ]
 
 
-def message_text(message: object) -> str:
-    """Flatten the text blocks of an AIMessage across LangChain versions."""
-    content = getattr(message, "content", message)
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for block in content:
-            if isinstance(block, str):
-                parts.append(block)
-            elif isinstance(block, dict):
-                text = block.get("text")
-                if isinstance(text, str):
-                    parts.append(text)
-        return "\n".join(parts)
-    return str(content)
-
-
-def parse_verdict_text(text: str) -> CatVerdict:
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        lines = stripped.splitlines()
-        stripped = "\n".join(lines[1:-1] if lines[-1].startswith("```") else lines[1:])
-
-    start = stripped.find("{")
-    end = stripped.rfind("}")
-    if start == -1 or end <= start:
-        raise ValueError("モデルの応答に JSON オブジェクトが含まれていません。")
-
-    try:
-        payload = json.loads(stripped[start : end + 1])
-    except json.JSONDecodeError as exc:
-        raise ValueError("モデルの応答 JSON を解析できませんでした。") from exc
-
-    return CatVerdict.model_validate(payload)
-
-
 class LangChainCatAnalyzer:
-    """Vision classifier backed by a LangChain chat model."""
+    """Vision classifier backed by a LangChain chat model.
 
-    def __init__(self, model: ChatOpenAI, *, mode: str = "auto") -> None:
-        if mode not in {"auto", "function_calling", "json_schema", "json"}:
-            raise ValueError(f"Unsupported structured output mode: {mode}")
+    Every verdict is requested through ``json_schema`` structured output, so the
+    provider must advertise structured-output support. There is no free-form
+    JSON fallback: a model that cannot honour the schema fails that image.
+    """
+
+    def __init__(self, model: ChatOpenAI) -> None:
         self._model = model
-        self._mode = mode
 
     async def analyze(self, path: Path, media_type: str) -> AnalysisOutcome:
         data = path.read_bytes()
-
-        if self._mode == "json":
-            return await self._invoke_json(data, media_type)
-
-        method = "json_schema" if self._mode == "auto" else self._mode
-        try:
-            structured = self._model.with_structured_output(
-                CatVerdict,
-                method=method,  # type: ignore[arg-type]
-                include_raw=True,
-            )
-            result = await structured.ainvoke(build_messages(data, media_type))
-        except Exception:
-            if self._mode != "auto":
-                raise
-            logger.warning(
-                "Structured output failed; falling back to JSON parsing",
-                exc_info=True,
-            )
-            return await self._invoke_json(data, media_type)
+        structured = self._model.with_structured_output(
+            CatVerdict,
+            method="json_schema",
+            include_raw=True,
+        )
+        result = await structured.ainvoke(build_messages(data, media_type))
 
         raw = result.get("raw") if isinstance(result, dict) else result
         parsed = result.get("parsed") if isinstance(result, dict) else result
         parsing_error = result.get("parsing_error") if isinstance(result, dict) else None
         usage = extract_usage(raw)
 
-        if parsing_error is None and parsed is not None:
-            verdict = (
-                parsed if isinstance(parsed, CatVerdict) else CatVerdict.model_validate(parsed)
-            )
-            return AnalysisOutcome(verdict=verdict, usage=usage)
-
-        if self._mode != "auto":
-            if parsing_error is not None:
-                raise parsing_error
+        if parsing_error is not None:
+            raise parsing_error
+        if parsed is None:
             raise ValueError("モデルの構造化出力を解析できませんでした。")
 
-        logger.warning(
-            "Structured output was not parsed; falling back to JSON parsing",
-            exc_info=parsing_error,
+        verdict = (
+            parsed if isinstance(parsed, CatVerdict) else CatVerdict.model_validate(parsed)
         )
-        fallback = await self._invoke_json(data, media_type)
-        return AnalysisOutcome(
-            verdict=fallback.verdict,
-            usage=merge_usage(usage, fallback.usage),
-        )
-
-    async def _invoke_json(self, data: bytes, media_type: str) -> AnalysisOutcome:
-        message = await self._model.ainvoke(build_messages(data, media_type, json_mode=True))
-        return AnalysisOutcome(
-            verdict=parse_verdict_text(message_text(message)),
-            usage=extract_usage(message),
-        )
+        return AnalysisOutcome(verdict=verdict, usage=usage)
 
 
 def create_analyzer(settings: Settings) -> MultiModelCatAnalyzer | None:
     """Build the configured analyzer, or None when no model is configured."""
     if not settings.llm_configured:
         return None
-    return MultiModelCatAnalyzer(settings, mode=settings.llm_structured_output)
+    return MultiModelCatAnalyzer(settings)
 
 
 class MultiModelCatAnalyzer:
     """Dispatch each request to a cached per-model analyzer.
 
     The default model (from ``LLM_MODEL``) is used whenever a request does
-    not name one. Structured-output settings apply equally to every model.
-    Clients are cached by the effective request options as well as the model,
-    because ``ChatOpenAI`` holds those values on the instance.
+    not name one. Clients are cached by the effective request options as well
+    as the model, because ``ChatOpenAI`` holds those values on the instance.
     """
 
-    def __init__(self, settings: Settings, *, mode: str = "auto") -> None:
-        if mode not in {"auto", "function_calling", "json_schema", "json"}:
-            raise ValueError(f"Unsupported structured output mode: {mode}")
+    def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._mode = mode
         self._analyzers: dict[
             tuple[str, str | None, float, int | None], LangChainCatAnalyzer
         ] = {}
@@ -300,6 +204,10 @@ class MultiModelCatAnalyzer:
             kwargs["max_tokens"] = resolved.max_tokens
         if self._settings.llm_base_url:
             kwargs["base_url"] = self._settings.llm_base_url
+            if is_openrouter(self._settings.llm_base_url):
+                # Only route to endpoints that support the requested
+                # parameters, including ``structured_outputs``.
+                kwargs["extra_body"] = {"provider": {"require_parameters": True}}
 
         try:
             chat_model = ChatOpenAI(**kwargs)  # type: ignore[arg-type]
@@ -308,6 +216,6 @@ class MultiModelCatAnalyzer:
                 f"LLM クライアントを作成できません: {exc}"
             ) from exc
 
-        analyzer = LangChainCatAnalyzer(chat_model, mode=self._mode)
+        analyzer = LangChainCatAnalyzer(chat_model)
         self._analyzers[key] = analyzer
         return analyzer

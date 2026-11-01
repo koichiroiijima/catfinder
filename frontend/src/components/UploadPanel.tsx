@@ -92,7 +92,7 @@ export function UploadPanel({
         >
           ファイルを選択
         </button>
-        <small>JPEG / PNG / WebP、最大50枚・1枚15MBまで</small>
+        <small>JPEG / PNG / WebP、最大500枚・1枚15MBまで</small>
       </div>
 
       {files.length > 0 && (

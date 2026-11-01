@@ -96,6 +96,7 @@ class AnalysisSummary(BaseModel):
     model: str | None = None
     options: ChatOptions = Field(default_factory=ChatOptions)
     usage: TokenUsage | None = None
+    eta_seconds: int | None = None
     images: list[ImageResult]
 
 

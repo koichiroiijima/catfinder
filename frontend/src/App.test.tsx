@@ -33,6 +33,7 @@ const completed = {
     reasoning_tokens: 500,
     cost: 0.0012,
   },
+  eta_seconds: null,
   images: [
     {
       id: 'image-1',
@@ -53,6 +54,25 @@ const completed = {
       reason: '猫は写っていません。',
       error: null,
       url: '/api/analyses/job-1/images/image-2',
+    },
+  ],
+}
+
+const running = {
+  ...completed,
+  status: 'running',
+  completed: 1,
+  cat_count: 1,
+  no_cat_count: 0,
+  eta_seconds: 125,
+  images: [
+    completed.images[0],
+    {
+      ...completed.images[1],
+      status: 'running',
+      has_cat: null,
+      confidence: null,
+      reason: null,
     },
   ],
 }
@@ -106,6 +126,45 @@ describe('App', () => {
     expect(body?.has('reasoning_effort')).toBe(false)
     expect(body?.has('temperature')).toBe(false)
     expect(body?.has('max_tokens')).toBe(false)
+  })
+
+  it('caps the selection at 500 images', () => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(modelCatalog))
+
+    render(<App />)
+    selectFiles(...Array.from({ length: 501 }, (_, index) => `cat-${index}.png`))
+
+    expect(screen.getByText('一度に追加できるのは 500 枚までです。')).toBeInTheDocument()
+    expect(screen.getByText('500 枚')).toBeInTheDocument()
+  })
+
+  it('shows a rough remaining time while running', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(jsonResponse(modelCatalog))
+      .mockResolvedValueOnce(jsonResponse({ id: 'job-1', status: 'queued', total: 2 }, 202))
+      .mockResolvedValueOnce(jsonResponse(running))
+      .mockResolvedValue(jsonResponse(running))
+
+    render(<App />)
+    selectFiles('cat.png', 'dog.png')
+    fireEvent.click(screen.getByRole('button', { name: '判定する' }))
+
+    expect(await screen.findByText('残り時間: 約 3 分（概算）')).toBeInTheDocument()
+  })
+
+  it('renders verdicts when the server response omits chat options', async () => {
+    const withoutOptions = { ...completed, options: undefined }
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(jsonResponse(modelCatalog))
+      .mockResolvedValueOnce(jsonResponse({ id: 'job-1', status: 'queued', total: 2 }, 202))
+      .mockResolvedValueOnce(jsonResponse(withoutOptions))
+
+    render(<App />)
+    selectFiles('cat.png', 'dog.png')
+    fireEvent.click(screen.getByRole('button', { name: '判定する' }))
+
+    expect(await screen.findByText('茶色の猫が写っています。')).toBeInTheDocument()
+    expect(screen.queryByText(/設定:/)).not.toBeInTheDocument()
   })
 
   it('sends advanced chat options', async () => {

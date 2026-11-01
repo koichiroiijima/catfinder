@@ -12,7 +12,7 @@ import { UploadPanel } from './components/UploadPanel'
 import { useAnalysis } from './useAnalysis'
 import './App.css'
 
-const MAX_FILES = 50
+const MAX_FILES = 500
 const MAX_BYTES = 15 * 1024 * 1024
 const ALLOWED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
 
@@ -47,7 +47,24 @@ function formatCost(value: number): string {
   return `$${value.toFixed(4)}`
 }
 
-function formatOptions(options: ChatOptions): string | null {
+function formatEta(seconds: number): string {
+  const total = Math.max(1, Math.round(seconds))
+  if (total < 60) {
+    return `約 ${total} 秒`
+  }
+  const minutes = Math.ceil(total / 60)
+  if (minutes < 60) {
+    return `約 ${minutes} 分`
+  }
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  return rest === 0 ? `約 ${hours} 時間` : `約 ${hours} 時間 ${rest} 分`
+}
+
+function formatOptions(options: ChatOptions | null | undefined): string | null {
+  if (!options) {
+    return null
+  }
   const parts: string[] = []
   if (options.reasoning_effort) {
     parts.push(`推論: ${EFFORT_LABELS[options.reasoning_effort] ?? options.reasoning_effort}`)
@@ -242,6 +259,14 @@ export default function App() {
                     ? 'アップロードを受け付けました。判定を開始しています…'
                     : `${summary.completed} / ${summary.total} 枚を判定しました。`}
                 </p>
+                {summary?.status !== 'completed' && (
+                  <p className="eta">
+                    残り時間:{' '}
+                    {summary === null || summary.eta_seconds == null
+                      ? '計算中…'
+                      : `${formatEta(summary.eta_seconds)}（概算）`}
+                  </p>
+                )}
                 {summary?.model && <p className="model-used">判定モデル: {summary.model}</p>}
                 {usedOptions && <p className="options-used">設定: {usedOptions}</p>}
                 {summary?.usage && (

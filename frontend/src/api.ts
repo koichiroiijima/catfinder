@@ -43,6 +43,7 @@ export interface AnalysisSummary {
   model: string | null
   options: ChatOptions
   usage: TokenUsage | null
+  eta_seconds: number | null
   images: ImageResult[]
 }
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Awaitable, Callable
 
@@ -8,6 +9,8 @@ import httpx
 
 from app.config import Settings
 from app.schemas import ModelsResponse
+
+logger = logging.getLogger(__name__)
 
 # The catalog is refreshed by background-free lazy fetches. A long TTL keeps
 # repeat `/api/models` calls cheap, a short one recovers quickly from a
@@ -39,6 +42,20 @@ def _supports_vision(entry: dict[str, object]) -> bool:
     return True
 
 
+def _supports_structured_output(entry: dict[str, object]) -> bool:
+    """Keep entries that advertise structured outputs, and unknown-shaped entries.
+
+    OpenRouter lists ``structured_outputs`` in ``supported_parameters`` when a
+    model can honour a ``json_schema`` response format. Most other
+    OpenAI-compatible servers do not return parameter metadata at all, so the
+    safest policy is to keep them rather than hide every model.
+    """
+    parameters = entry.get("supported_parameters")
+    if not isinstance(parameters, list):
+        return True
+    return "structured_outputs" in [str(item).lower() for item in parameters]
+
+
 def _price(value: object) -> float:
     try:
         return float(value)  # type: ignore[arg-type]
@@ -66,7 +83,7 @@ def sort_model_ids(vision_entries: list[dict[str, object]]) -> list[str]:
 
 
 async def fetch_vision_models(base_url: str, api_key: str, timeout: float) -> list[str]:
-    """List vision model ids from an OpenAI-compatible ``/models`` endpoint."""
+    """List vision models that support structured output from ``/models``."""
     headers = {}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -81,8 +98,12 @@ async def fetch_vision_models(base_url: str, api_key: str, timeout: float) -> li
         items = payload.get("data") or []
     if not isinstance(items, list):
         return []
+    return select_model_ids(items)
 
-    vision: list[dict[str, object]] = []
+
+def select_model_ids(items: list[object]) -> list[str]:
+    """Keep deduplicated vision models that can honour a JSON schema."""
+    usable: list[dict[str, object]] = []
     seen: set[str] = set()
     for item in items:
         if not isinstance(item, dict):
@@ -90,11 +111,15 @@ async def fetch_vision_models(base_url: str, api_key: str, timeout: float) -> li
         model_id = item.get("id")
         if not isinstance(model_id, str) or not model_id.strip():
             continue
-        if model_id in seen or not _supports_vision(item):
+        if (
+            model_id in seen
+            or not _supports_vision(item)
+            or not _supports_structured_output(item)
+        ):
             continue
         seen.add(model_id)
-        vision.append(item)
-    return sort_model_ids(vision)
+        usable.append(item)
+    return sort_model_ids(usable)
 
 
 class ModelCatalog:
@@ -117,18 +142,32 @@ class ModelCatalog:
         return self._settings.llm_model
 
     async def list(self) -> ModelsResponse:
-        default = self.default.strip()
+        configured = self.default.strip()
 
         async with self._lock:
             now = time.monotonic()
             if self._models is None or now >= self._expires:
                 await self._refresh(now)
 
-            entries = list(self._models or [])
-            if default:
-                entries = [default] + [item for item in entries if item != default]
-            valid = [item for item in entries if item.strip()]
-            return ModelsResponse(models=valid, default=default)
+            if self._models is None:
+                # The provider catalog is unavailable, so we cannot verify the
+                # configured model. Keep trusting it rather than hiding it.
+                valid = [configured] if configured else []
+                return ModelsResponse(models=valid, default=configured)
+
+            entries = list(dict.fromkeys(item for item in self._models if item.strip()))
+            if configured and configured in entries:
+                entries = [configured] + [item for item in entries if item != configured]
+            elif configured:
+                logger.warning(
+                    "LLM_MODEL %r is not offered as a structured-output vision model; "
+                    "using %r instead",
+                    configured,
+                    entries[0] if entries else "",
+                )
+
+            default = configured if configured in entries else (entries[0] if entries else "")
+            return ModelsResponse(models=entries, default=default)
 
     async def _refresh(self, now: float) -> None:
         base_url = self._settings.llm_base_url

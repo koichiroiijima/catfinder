@@ -249,6 +249,13 @@ button.secondary:hover:not(:disabled) {
   color: var(--muted, #666);
 }
 
+.eta {
+  margin: 4px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted, #666);
+}
+
 .advanced-options {
   margin-top: 14px;
   padding: 12px 14px;

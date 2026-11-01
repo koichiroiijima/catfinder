@@ -44,6 +44,19 @@ def _aggregate_usage(usages: list[TokenUsage | None]) -> TokenUsage | None:
     )
 
 
+def estimate_remaining_seconds(
+    *,
+    total: int,
+    completed: int,
+    elapsed_seconds: float,
+) -> int | None:
+    """Very rough ETA based on the completion rate observed so far."""
+    remaining = total - completed
+    if remaining <= 0 or completed <= 0 or elapsed_seconds <= 0:
+        return None
+    return max(1, round(elapsed_seconds / completed * remaining))
+
+
 @dataclass(slots=True)
 class JobImage:
     id: str
@@ -64,6 +77,7 @@ class AnalysisJob:
     id: str
     directory: Path
     created_at: float
+    started_at: float | None = None
     model: str | None = None
     options: ChatOptions = field(default_factory=ChatOptions)
     status: AnalysisStatus = AnalysisStatus.QUEUED
@@ -143,6 +157,7 @@ class AnalysisService:
         task.add_done_callback(self._tasks.discard)
 
     async def _run(self, job: AnalysisJob) -> None:
+        job.started_at = time.monotonic()
         job.status = AnalysisStatus.RUNNING
         try:
             await asyncio.gather(*(self._analyze_one(job, item) for item in job.images))
@@ -200,17 +215,26 @@ class AnalysisService:
         cat_count = sum(1 for item in images if item.status == ImageStatus.CAT)
         no_cat_count = sum(1 for item in images if item.status == ImageStatus.NO_CAT)
         error_count = sum(1 for item in images if item.status == ImageStatus.ERROR)
+        completed = cat_count + no_cat_count + error_count
+        eta_seconds = None
+        if job.status == AnalysisStatus.RUNNING and job.started_at is not None:
+            eta_seconds = estimate_remaining_seconds(
+                total=len(images),
+                completed=completed,
+                elapsed_seconds=time.monotonic() - job.started_at,
+            )
         return AnalysisSummary(
             id=job.id,
             status=job.status,
             total=len(images),
-            completed=cat_count + no_cat_count + error_count,
+            completed=completed,
             cat_count=cat_count,
             no_cat_count=no_cat_count,
             error_count=error_count,
             model=job.model,
             options=job.options,
             usage=_aggregate_usage([item.usage for item in job.images]),
+            eta_seconds=eta_seconds,
             images=images,
         )
 

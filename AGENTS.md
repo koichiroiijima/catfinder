@@ -38,8 +38,10 @@ scripts/ui.sh start|stop|restart|status       # UI : 5173
 - ジョブはインメモリ (`app/jobs.py`)。DB・マイグレーションはない。TTL で画像ごと削除。
 - 画像は Pillow で実データを検証し、UUID 名で一時保存。元のファイル名は表示専用。
 - `app/analyzer.py` は LangChain の標準 content block で base64 画像を送信し、
-  `CatVerdict` に structured output する。`LLM_STRUCTURED_OUTPUT=auto` は
-  `json_schema` 失敗時に JSON パースへフォールバックする。
+  `CatVerdict` に常に `json_schema` の structured output で出力させる。
+  JSON パースへのフォールバックはない。
+- `app/models.py` は `GET /models` から vision かつ `structured_outputs` 対応の
+  モデルだけを返す。`LLM_MODEL` が一覧に無い場合は一覧先頭を既定にする。
 - API パラメータ (`reasoning_effort` / `temperature` / `max_tokens`) はジョブに保存し、
   モデルと実効パラメータの組で `ChatOpenAI` をキャッシュする。
 - 使用量は `include_raw=True` の raw `usage_metadata` から取得する。API はジョブ合計のみ

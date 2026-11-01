@@ -9,9 +9,10 @@ React + Vite の UI が進捗と結果を表示します。
 - 複数画像をまとめてアップロードし、画像ごとに「猫あり / 猫なし / エラー」を表示
 - 既定で OpenRouter の vision モデルを使用。OpenAI 互換 API であれば
   OpenAI・Ollama・vLLM・LiteLLM などを `LLM_BASE_URL` / `LLM_MODEL` で切り替え可能
-- 判定ごとに vision モデルを選択可能（選択肢は `/api/models` で提供元から自動取得）
+- 判定ごとに vision モデルを選択可能（`/api/models` が Structured Output 対応モデルだけを自動取得）
 - 「詳細設定」から推論の強さ（reasoning effort）、temperature、最大出力トークンを指定可能
 - 結果の絞り込み、件数集計、判定理由・確信度、使用トークン数（取得できた場合はコスト）の表示
+- 判定中の残り時間を超概算で表示
 - 1 枚の判定が失敗しても、残りの画像の判定は継続
 - 履歴は持たず、結果と画像は一定時間後に自動削除（ローカル利用向け）
 
@@ -54,7 +55,12 @@ LLM_MODEL=your-vision-model
 ```
 
 `LLM_MODEL` は「判定 UI でモデルを選ばなかったときの既定値」になります。
-UI では判定のたびに、接続先が `/models` で提供する vision 対応モデルから選べます。
+UI では判定のたびに、接続先が `/models` で提供する「vision かつ Structured
+Output 対応」のモデルから選べます。`LLM_MODEL` がその一覧に無い場合は、
+一覧の先頭が既定値として使われます。判定結果は常に JSON Schema
+（`json_schema`）による Structured Output で受け取るため、非対応モデルは
+一覧に出ません（提供元が `supported_parameters` を返さない場合は判定できず、
+従来どおり全 vision モデルが候補になります）。
 
 ## 起動
 
@@ -88,14 +94,15 @@ scripts/ui.sh status
 ## 使い方
 
 1. 画像をドラッグ＆ドロップ、または「ファイルを選択」から追加
-2. 「判定モデル」で使用する vision モデルを選ぶ（省略時は `LLM_MODEL`）
+2. 「判定モデル」で使用する vision + Structured Output 対応モデルを選ぶ
+   （省略時は `LLM_MODEL`、一覧に無ければ一覧の先頭）
 3. 必要に応じて「詳細設定」で推論の強さ・temperature・最大出力トークンを指定
 4. 「判定する」を押す
-5. 進捗バーと件数が更新され、完了後に結果カードが表示される
+5. 進捗バー・件数・残り時間（概算）が更新され、完了後に結果カードが表示される
 6. 「すべて / 猫あり / 猫なし / エラー」で絞り込む
 7. 「別の画像で判定」でサーバー上の結果を削除して最初に戻る
 
-対応形式は JPEG / PNG / WebP、最大 50 枚・1 枚 15MB です。
+対応形式は JPEG / PNG / WebP、最大 500 枚・1 枚 15MB です。
 LLM の確信度はモデルの自己申告値であり、校正された確率ではありません。
 
 ### API パラメータと使用トークン
@@ -121,7 +128,7 @@ LLM の確信度はモデルの自己申告値であり、校正された確率�
 | `GET` | `/api/analyses/{id}` | 進捗と画像ごとの判定結果 |
 | `GET` | `/api/analyses/{id}/images/{image_id}` | 結果表示用の画像 |
 | `DELETE` | `/api/analyses/{id}` | ジョブと画像を削除（204） |
-| `GET` | `/api/models` | 選択可能な vision モデルの一覧と既定値 |
+| `GET` | `/api/models` | 選択可能な vision + Structured Output 対応モデルの一覧と既定値 |
 | `GET` | `/api/health` | 稼働状況と LLM 設定有無 |
 
 詳細な仕様は [docs/details.md](docs/details.md)、設計は
@@ -137,15 +144,19 @@ Swagger UI は API 起動中に http://127.0.0.1:8000/docs で確認できます
 | `LLM_MODEL` | `nvidia/nemotron-3.5-super-vl:free` | 既定の vision モデル名。空にすると判定 API が 503 |
 | `LLM_TIMEOUT_SECONDS` | `60` | 1 枚あたりのタイムアウト |
 | `LLM_MAX_RETRIES` | `2` | LangChain 側のリトライ回数 |
-| `LLM_CONCURRENCY` | `4` | 同時に判定する画像数 |
-| `LLM_STRUCTURED_OUTPUT` | `auto` | `auto` / `function_calling` / `json_schema` / `json` |
-| `MAX_FILES` | `50` | 1 リクエストあたりの最大枚数 |
+| `LLM_CONCURRENCY` | `8` | 同時に送る判定リクエスト数 |
+| `MAX_FILES` | `500` | 1 リクエストあたりの最大枚数 |
 | `MAX_FILE_MB` | `15` | 1 枚あたりの最大サイズ |
 | `ANALYSIS_TTL_MINUTES` | `60` | 結果と画像の保持時間 |
 | `UPLOAD_DIR` | 一時ディレクトリ | 画像の保存先を固定する場合に指定 |
 
-`LLM_STRUCTURED_OUTPUT=auto` は、まず構造化出力を試し、未対応の
-OpenAI 互換サーバーでは JSON 応答のパースに自動フォールバックします。
+判定結果は常に `json_schema` の Structured Output で受け取ります。自由形式の
+JSON 応答をパースするフォールバックはなく、非対応のモデル・endpoint では
+その画像がエラーになります。OpenRouter 接続時は `provider.require_parameters`
+を送り、Structured Output 対応 endpoint にのみルーティングします。
+`LLM_CONCURRENCY` を大きくすると速くなりますが、プロバイダのレート制限
+（429）に当たりやすくなります。残り時間は完了枚数と経過時間から求める
+超概算で、判定中に変動します。
 
 ## テスト
 

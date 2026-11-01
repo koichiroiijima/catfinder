@@ -1,22 +1,37 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import os
 
 import pytest
 from PIL import Image
 
+from app.analyzer import AnalysisOutcome
 from app.models import ModelCatalog
 from app.schemas import CatVerdict, ChatOptions, TokenUsage
 from tests.conftest import FakeAnalyzer, client_for, make_image, wait_for_completion
 
 
-async def fetch_two_models(base_url: str, api_key: str, timeout: float) -> list[str]:
-    return ["other-model", "third-model"]
-
-
 def _catalog(settings) -> ModelCatalog:
-    return ModelCatalog(settings, fetch=fetch_two_models)
+    async def fetch(base_url: str, api_key: str, timeout: float) -> list[str]:
+        return [settings.llm_model, "other-model", "third-model"]
+
+    return ModelCatalog(settings, fetch=fetch)
+
+
+def _catalog_without_default(settings) -> ModelCatalog:
+    async def fetch(base_url: str, api_key: str, timeout: float) -> list[str]:
+        return ["other-model", "third-model"]
+
+    return ModelCatalog(settings, fetch=fetch)
+
+
+def _empty_catalog(settings) -> ModelCatalog:
+    async def fetch(base_url: str, api_key: str, timeout: float) -> list[str]:
+        return []
+
+    return ModelCatalog(settings, fetch=fetch)
 
 
 def _upload(name: str, data: bytes, media_type: str = "image/png"):
@@ -31,6 +46,24 @@ def _analyzer_for(cat: bytes, no_cat: bytes, broken: bytes) -> FakeAnalyzer:
         },
         failures={broken},
     )
+
+
+class ConcurrencyProbe:
+    """Track how many analyze calls overlap at once."""
+
+    def __init__(self, verdicts: dict[bytes, CatVerdict]) -> None:
+        self.verdicts = verdicts
+        self.active = 0
+        self.max_active = 0
+
+    async def analyze(self, path, media_type, *, model=None, options=None):
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
+            await asyncio.sleep(0.05)
+            return AnalysisOutcome(verdict=self.verdicts[path.read_bytes()])
+        finally:
+            self.active -= 1
 
 
 def test_health_reports_llm_configuration(settings):
@@ -101,6 +134,24 @@ def test_mixed_results_and_image_serving(settings):
         assert image_response.status_code == 200
         assert image_response.headers["content-type"] == "image/png"
         assert image_response.content == cat
+
+
+def test_parallel_requests_are_bounded_by_concurrency(settings):
+    images = [make_image((index * 30, 40, 50)) for index in range(3)]
+    analyzer = ConcurrencyProbe(
+        {data: CatVerdict(has_cat=True, confidence=0.9, reason="猫。") for data in images}
+    )
+
+    with client_for(settings, analyzer) as client:
+        response = client.post(
+            "/api/analyses",
+            files=[_upload(f"{index}.png", data) for index, data in enumerate(images)],
+        )
+        assert response.status_code == 202
+        payload = wait_for_completion(client, response.json()["id"])
+        assert payload["completed"] == 3
+
+    assert analyzer.max_active == settings.llm_concurrency
 
 
 def test_post_without_files_returns_400(settings):
@@ -204,6 +255,41 @@ def test_post_without_model_uses_default(settings):
         payload = wait_for_completion(client, response.json()["id"])
         assert payload["model"] == "test-vision-model"
         assert analyzer.models == ["test-vision-model"]
+
+
+def test_list_models_uses_first_model_when_default_is_not_offered(settings):
+    with client_for(
+        settings, FakeAnalyzer(), catalog=_catalog_without_default(settings)
+    ) as client:
+        payload = client.get("/api/models").json()
+
+        assert payload["default"] == "other-model"
+        assert payload["models"] == ["other-model", "third-model"]
+
+
+def test_post_without_model_uses_catalog_default_when_llm_model_is_not_offered(settings):
+    data = make_image()
+    analyzer = FakeAnalyzer(
+        verdicts={data: CatVerdict(has_cat=True, confidence=0.9, reason="猫。")}
+    )
+    with client_for(
+        settings, analyzer, catalog=_catalog_without_default(settings)
+    ) as client:
+        response = client.post("/api/analyses", files=[_upload("cat.png", data)])
+        assert response.status_code == 202
+
+        payload = wait_for_completion(client, response.json()["id"])
+        assert payload["model"] == "other-model"
+        assert analyzer.models == ["other-model"]
+
+
+def test_post_without_model_returns_503_when_no_model_is_usable(settings):
+    data = make_image()
+    with client_for(settings, FakeAnalyzer(), catalog=_empty_catalog(settings)) as client:
+        response = client.post("/api/analyses", files=[_upload("cat.png", data)])
+
+        assert response.status_code == 503
+        assert "Structured Output" in response.json()["detail"]
 
 
 def test_post_with_unknown_model_returns_400(settings):

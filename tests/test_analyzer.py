@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import json
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -12,8 +11,7 @@ from app.analyzer import (
     build_messages,
     create_analyzer,
     extract_usage,
-    message_text,
-    parse_verdict_text,
+    is_openrouter,
 )
 from app.config import Settings
 from app.schemas import CatVerdict, ChatOptions, TokenUsage
@@ -61,7 +59,6 @@ class UnparsedStructured:
 class FakeModel:
     def __init__(
         self,
-        text: str = "",
         *,
         structured_result: CatVerdict | None = None,
         structured_error: bool = False,
@@ -69,7 +66,6 @@ class FakeModel:
         usage: dict | None = None,
         cost: float | None = None,
     ) -> None:
-        self.text = text
         self.structured_result = structured_result
         self.structured_error = structured_error
         self.parsing_error = parsing_error
@@ -77,7 +73,7 @@ class FakeModel:
         self.cost = cost
         self.method: str | None = None
         self.include_raw: bool | None = None
-        self.plain_messages = None
+        self.messages = None
 
     def with_structured_output(
         self,
@@ -96,30 +92,6 @@ class FakeModel:
             self.structured_result,
             ai_message(usage=self.usage, cost=self.cost),
         )
-
-    async def ainvoke(self, messages):
-        self.plain_messages = messages
-        return ai_message(self.text, usage=self.usage, cost=self.cost)
-
-
-def test_parse_verdict_accepts_plain_and_fenced_json():
-    plain = '{"has_cat": true, "confidence": 0.8, "reason": "猫がいます。"}'
-    fenced = f"```json\n{plain}\n```"
-    prose = f"Result:\n{plain}\nDone."
-
-    for text in (plain, fenced, prose):
-        verdict = parse_verdict_text(text)
-        assert verdict.has_cat is True
-        assert verdict.confidence == 0.8
-
-
-def test_parse_verdict_normalizes_percentage_and_clamps():
-    high = parse_verdict_text('{"has_cat": false, "confidence": 87, "reason": "なし"}')
-    percent = parse_verdict_text('{"has_cat": false, "confidence": "87%", "reason": "なし"}')
-    low = parse_verdict_text('{"has_cat": false, "confidence": -3, "reason": "なし"}')
-    assert high.confidence == 0.87
-    assert percent.confidence == 0.87
-    assert low.confidence == 0.0
 
 
 def test_create_analyzer_requires_a_model():
@@ -152,15 +124,39 @@ def test_multi_model_analyzer_caches_one_chat_model_per_name_and_options():
     assert first._model.temperature == 0.0
 
 
+def test_openrouter_clients_require_capable_endpoints():
+    settings = Settings(_env_file=None)
+    analyzer = MultiModelCatAnalyzer(settings)
+
+    client = analyzer._analyzer_for("model-a")._model
+
+    assert client.extra_body == {"provider": {"require_parameters": True}}
+
+
+def test_other_providers_do_not_get_openrouter_routing():
+    settings = Settings(
+        _env_file=None,
+        llm_base_url="http://127.0.0.1:11434/v1",
+    )
+    analyzer = MultiModelCatAnalyzer(settings)
+
+    client = analyzer._analyzer_for("model-a")._model
+
+    assert client.extra_body is None
+
+
+def test_is_openrouter_matches_the_host_only():
+    assert is_openrouter("https://openrouter.ai/api/v1") is True
+    assert is_openrouter("https://api.openrouter.ai/v1") is True
+    assert is_openrouter("https://example.com/openrouter.ai") is False
+    assert is_openrouter("http://127.0.0.1:11434/v1") is False
+    assert is_openrouter(None) is False
+
+
 def test_default_model_targets_openrouter():
     settings = Settings(_env_file=None)
     assert settings.llm_base_url == "https://openrouter.ai/api/v1"
     assert settings.llm_model == "nvidia/nemotron-3.5-super-vl:free"
-
-
-def test_parse_verdict_rejects_non_json():
-    with pytest.raises(ValueError):
-        parse_verdict_text("There is a cat.")
 
 
 def test_build_messages_embeds_image_as_base64():
@@ -173,11 +169,6 @@ def test_build_messages_embeds_image_as_base64():
     assert image_block["type"] == "image"
     assert image_block["mime_type"] == "image/png"
     assert base64.b64decode(image_block["base64"]) == data
-
-
-def test_message_text_flattens_content_blocks():
-    message = AIMessage(content=[{"type": "text", "text": "a"}, {"type": "text", "text": "b"}])
-    assert message_text(message) == "a\nb"
 
 
 def test_extract_usage_returns_none_without_usage_metadata():
@@ -204,7 +195,7 @@ def test_extract_usage_reads_reasoning_tokens_and_cost():
     )
 
 
-async def test_analyzer_uses_structured_output(tmp_path):
+async def test_analyzer_uses_json_schema_structured_output(tmp_path):
     image = tmp_path / "cat.png"
     image.write_bytes(make_image())
     expected = CatVerdict(has_cat=True, confidence=0.91, reason="猫です。")
@@ -238,75 +229,19 @@ async def test_analyzer_reports_usage_from_structured_output(tmp_path):
     )
 
 
-async def test_analyzer_falls_back_to_json_on_structured_failure(tmp_path):
-    image = tmp_path / "cat.png"
-    image.write_bytes(make_image())
-    model = FakeModel(
-        text=json.dumps(
-            {"has_cat": True, "confidence": 0.75, "reason": "猫が写っています。"},
-            ensure_ascii=False,
-        ),
-        structured_error=True,
-        usage={"input_tokens": 40, "output_tokens": 10, "total_tokens": 50},
-    )
-
-    outcome = await LangChainCatAnalyzer(model, mode="auto").analyze(image, "image/png")
-
-    assert outcome.verdict.has_cat is True
-    assert outcome.verdict.confidence == 0.75
-    assert outcome.usage == TokenUsage(
-        input_tokens=40,
-        output_tokens=10,
-        total_tokens=50,
-    )
-    assert model.plain_messages is not None
-
-
-async def test_analyzer_sums_usage_when_falling_back_after_parse_error(tmp_path):
-    image = tmp_path / "cat.png"
-    image.write_bytes(make_image())
-    usage = {"input_tokens": 40, "output_tokens": 10, "total_tokens": 50}
-    model = FakeModel(
-        text=json.dumps(
-            {"has_cat": True, "confidence": 0.75, "reason": "猫が写っています。"},
-            ensure_ascii=False,
-        ),
-        parsing_error=True,
-        usage=usage,
-    )
-
-    outcome = await LangChainCatAnalyzer(model, mode="auto").analyze(image, "image/png")
-
-    assert outcome.verdict.has_cat is True
-    assert outcome.usage == TokenUsage(
-        input_tokens=80,
-        output_tokens=20,
-        total_tokens=100,
-    )
-
-
-async def test_analyzer_does_not_fall_back_outside_auto_mode(tmp_path):
+async def test_analyzer_raises_without_a_json_fallback(tmp_path):
     image = tmp_path / "cat.png"
     image.write_bytes(make_image())
     model = FakeModel(structured_error=True)
 
     with pytest.raises(RuntimeError, match="unsupported"):
-        await LangChainCatAnalyzer(model, mode="function_calling").analyze(image, "image/png")
+        await LangChainCatAnalyzer(model).analyze(image, "image/png")
 
 
-async def test_analyzer_json_mode_skips_structured_output(tmp_path):
+async def test_analyzer_raises_when_structured_output_is_not_parsed(tmp_path):
     image = tmp_path / "cat.png"
     image.write_bytes(make_image())
-    model = FakeModel(
-        text='{"has_cat": false, "confidence": 0.6, "reason": "猫はいません。"}',
-        usage={"input_tokens": 5, "output_tokens": 3, "total_tokens": 8},
-    )
+    model = FakeModel(parsing_error=True)
 
-    outcome = await LangChainCatAnalyzer(model, mode="json").analyze(image, "image/png")
-
-    assert outcome.verdict.has_cat is False
-    assert outcome.usage == TokenUsage(input_tokens=5, output_tokens=3, total_tokens=8)
-    assert model.method is None
-    assert model.plain_messages is not None
-    prompt = model.plain_messages[1].content[0]["text"]
-    assert "JSON" in prompt
+    with pytest.raises(ValueError, match="bad json"):
+        await LangChainCatAnalyzer(model).analyze(image, "image/png")

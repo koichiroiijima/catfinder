@@ -186,12 +186,24 @@ async def create_analysis(
     if model is not None:
         model = model.strip()
     if not model:
-        # Blank or omitted means "use the configured model."
-        model = settings.llm_model.strip()
+        # Blank or omitted means "use the catalog default", which follows the
+        # configured model unless it is not structured-output capable.
+        model = (await catalog.list()).default
+        if not model:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Structured Output に対応した vision モデルがありません。"
+                    "LLM_MODEL を変更してください。"
+                ),
+            )
     elif not await catalog.is_allowed(model):
         raise HTTPException(
             status_code=400,
-            detail="対応していないモデルです。選択肢から選んでください。",
+            detail=(
+                "対応していないモデルです。"
+                "Structured Output に対応した vision モデルを選択してください。"
+            ),
         )
     if len(selected) > settings.max_files:
         raise HTTPException(

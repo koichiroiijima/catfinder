@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from app.models import ModelCatalog, _supports_vision, sort_model_ids
+from app.models import (
+    ModelCatalog,
+    _supports_structured_output,
+    _supports_vision,
+    select_model_ids,
+    sort_model_ids,
+)
 from app.schemas import ModelsResponse
 
 
@@ -16,16 +22,28 @@ async def _echo_fetch(base_url: str, api_key: str, timeout: float) -> list[str]:
     return [f"seen:{base_url}:{api_key}"]
 
 
-async def test_catalog_lists_fetched_models_with_default_first(settings):
+async def test_catalog_uses_first_model_when_default_is_not_listed(settings):
     catalog = ModelCatalog(settings, fetch=_ok_fetch)
+    response = await catalog.list()
+
+    # The configured default is not structured-output capable (it is absent
+    # from the provider catalog), so the first capable model is the default.
+    assert response.default == "m-a"
+    assert response.models == ["m-a", "m-b"]
+    assert response.models.count(settings.llm_model) == 0
+
+
+async def test_catalog_puts_default_first_when_listed(settings):
+    async def fetch(base_url: str, api_key: str, timeout: float) -> list[str]:
+        return ["m-a", settings.llm_model, "m-b"]
+
+    catalog = ModelCatalog(settings, fetch=fetch)
     response = await catalog.list()
 
     assert response.default == settings.llm_model
     assert response.models[0] == settings.llm_model
-    # Duplicates from the provider are dropped and the default never appears twice.
     assert response.models.count(settings.llm_model) == 1
-    assert "m-a" in response.models
-    assert "m-b" in response.models
+    assert response.models == [settings.llm_model, "m-a", "m-b"]
 
 
 async def test_catalog_falls_back_to_default_only_on_fetch_failure(settings):
@@ -35,11 +53,24 @@ async def test_catalog_falls_back_to_default_only_on_fetch_failure(settings):
     assert response == ModelsResponse(models=[settings.llm_model], default=settings.llm_model)
 
 
+async def test_catalog_returns_empty_when_nothing_is_usable(settings):
+    async def fetch(base_url: str, api_key: str, timeout: float) -> list[str]:
+        return []
+
+    catalog = ModelCatalog(settings, fetch=fetch)
+    response = await catalog.list()
+
+    assert response == ModelsResponse(models=[], default="")
+
+
 async def test_catalog_passes_base_url_and_api_key_to_fetcher(settings):
     configured = settings.model_copy(
         update={"llm_base_url": "https://example.com/api/v1", "llm_api_key": "sk-test"}
     )
-    catalog = ModelCatalog(configured, fetch=_echo_fetch)
+    async def fetch(base_url: str, api_key: str, timeout: float) -> list[str]:
+        return [settings.llm_model, f"seen:{base_url}:{api_key}"]
+
+    catalog = ModelCatalog(configured, fetch=fetch)
     response = await catalog.list()
 
     assert response.models == [
@@ -59,7 +90,7 @@ async def test_catalog_lists_nothing_when_not_configured(settings):
 async def test_catalog_is_allowed_accepts_listed_models_only(settings):
     catalog = ModelCatalog(settings, fetch=_ok_fetch)
 
-    assert await catalog.is_allowed(settings.llm_model) is True
+    assert await catalog.is_allowed(settings.llm_model) is False
     assert await catalog.is_allowed("m-a") is True
     assert await catalog.is_allowed("m-b") is True
     assert await catalog.is_allowed("not-listed-model") is False
@@ -98,3 +129,39 @@ def test_supports_vision_drops_known_text_only_entries():
         {"id": "m", "architecture": {"modality": "text+image->text"}}
     ) is True
     assert _supports_vision({"id": "m"}) is True  # unknown shape: keep
+
+
+def test_supports_structured_output_requires_the_advertised_parameter():
+    assert _supports_structured_output(
+        {"id": "m", "supported_parameters": ["temperature", "structured_outputs"]}
+    ) is True
+    assert _supports_structured_output(
+        {"id": "m", "supported_parameters": ["temperature", "response_format"]}
+    ) is False
+    assert _supports_structured_output({"id": "m", "supported_parameters": []}) is False
+    assert _supports_structured_output({"id": "m"}) is True  # unknown shape: keep
+
+
+def test_select_model_ids_requires_vision_and_structured_output():
+    items = [
+        {
+            "id": "vision-structured",
+            "architecture": {"input_modalities": ["text", "image"]},
+            "supported_parameters": ["structured_outputs"],
+        },
+        {
+            "id": "vision-only",
+            "architecture": {"input_modalities": ["text", "image"]},
+            "supported_parameters": ["temperature"],
+        },
+        {
+            "id": "text-structured",
+            "architecture": {"input_modalities": ["text"]},
+            "supported_parameters": ["structured_outputs"],
+        },
+        {"id": "unknown-shape"},
+        {"id": "vision-structured"},  # duplicate
+        "not-a-dict",
+    ]
+
+    assert select_model_ids(items) == ["unknown-shape", "vision-structured"]
