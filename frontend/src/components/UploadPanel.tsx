@@ -1,5 +1,7 @@
 import { useRef, useState } from 'react'
 
+import type { ChatOptionInput } from '../api'
+
 interface UploadPanelProps {
   files: File[]
   previews: string[]
@@ -7,7 +9,9 @@ interface UploadPanelProps {
   disabled: boolean
   models: string[] | null
   model: string | null
+  options: ChatOptionInput
   onModelChange: (model: string) => void
+  onOptionsChange: (options: ChatOptionInput) => void
   onAdd: (files: File[]) => void
   onRemove: (index: number) => void
   onStart: () => void
@@ -27,7 +31,9 @@ export function UploadPanel({
   disabled,
   models,
   model,
+  options,
   onModelChange,
+  onOptionsChange,
   onAdd,
   onRemove,
   onStart,
@@ -129,6 +135,60 @@ export function UploadPanel({
           </select>
         </div>
       )}
+
+      <details className="advanced-options">
+        <summary>詳細設定</summary>
+        <div className="options-grid">
+          <label htmlFor="reasoning-effort">推論の強さ</label>
+          <select
+            id="reasoning-effort"
+            value={options.reasoning_effort}
+            disabled={disabled}
+            onChange={(event) =>
+              onOptionsChange({ ...options, reasoning_effort: event.target.value })
+            }
+          >
+            <option value="">既定</option>
+            <option value="none">なし</option>
+            <option value="minimal">最小</option>
+            <option value="low">低</option>
+            <option value="medium">中</option>
+            <option value="high">高</option>
+          </select>
+
+          <label htmlFor="temperature">Temperature</label>
+          <input
+            id="temperature"
+            type="number"
+            min="0"
+            max="2"
+            step="0.1"
+            placeholder="0（既定）"
+            value={options.temperature}
+            disabled={disabled}
+            onChange={(event) =>
+              onOptionsChange({ ...options, temperature: event.target.value })
+            }
+          />
+
+          <label htmlFor="max-tokens">最大出力トークン</label>
+          <input
+            id="max-tokens"
+            type="number"
+            min="1"
+            step="1"
+            placeholder="未指定"
+            value={options.max_tokens}
+            disabled={disabled}
+            onChange={(event) =>
+              onOptionsChange({ ...options, max_tokens: event.target.value })
+            }
+          />
+        </div>
+        <p className="options-hint">
+          モデルやプロバイダが対応していないパラメータを指定すると、判定がエラーになる場合があります。
+        </p>
+      </details>
 
       <div className="actions">
         <button

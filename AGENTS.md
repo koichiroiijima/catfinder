@@ -40,6 +40,10 @@ scripts/ui.sh start|stop|restart|status       # UI : 5173
 - `app/analyzer.py` は LangChain の標準 content block で base64 画像を送信し、
   `CatVerdict` に structured output する。`LLM_STRUCTURED_OUTPUT=auto` は
   `json_schema` 失敗時に JSON パースへフォールバックする。
+- API パラメータ (`reasoning_effort` / `temperature` / `max_tokens`) はジョブに保存し、
+  モデルと実効パラメータの組で `ChatOpenAI` をキャッシュする。
+- 使用量は `include_raw=True` の raw `usage_metadata` から取得する。API はジョブ合計のみ
+  返し、UI は合計トークン数（取得できればコスト）を表示する。
 - 画像 1 枚の失敗は `error` として記録し、ジョブは継続。`completed` は成功を意味しない。
 - フロントエンドは `/api` を相対パスで呼ぶ。Vite proxy 前提なので CORS を追加しない。
 - `frontend/src/useAnalysis.ts` が 1 秒ポーリング。`AbortController` と timer の後始末を壊さない。

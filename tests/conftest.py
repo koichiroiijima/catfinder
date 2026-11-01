@@ -10,10 +10,11 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from app.analyzer import AnalysisOutcome
 from app.config import Settings
 from app.main import create_app
 from app.models import ModelCatalog
-from app.schemas import CatVerdict
+from app.schemas import CatVerdict, ChatOptions, TokenUsage
 
 
 def make_image(
@@ -32,11 +33,16 @@ class FakeAnalyzer:
         self,
         verdicts: dict[bytes, CatVerdict] | None = None,
         failures: set[bytes] | None = None,
+        usage: TokenUsage | None = None,
+        usages: dict[bytes, TokenUsage] | None = None,
     ) -> None:
         self.verdicts = verdicts or {}
         self.failures = failures or set()
+        self.usage = usage
+        self.usages = usages or {}
         self.calls: list[bytes] = []
         self.models: list[str | None] = []
+        self.options: list[ChatOptions | None] = []
 
     async def analyze(
         self,
@@ -44,14 +50,19 @@ class FakeAnalyzer:
         media_type: str,
         *,
         model: str | None = None,
-    ) -> CatVerdict:
+        options: ChatOptions | None = None,
+    ) -> AnalysisOutcome:
         await asyncio.sleep(0.01)
         data = path.read_bytes()
         self.calls.append(data)
         self.models.append(model)
+        self.options.append(options)
         if data in self.failures:
             raise RuntimeError("model exploded")
-        return self.verdicts[data]
+        return AnalysisOutcome(
+            verdict=self.verdicts[data],
+            usage=self.usages.get(data, self.usage),
+        )
 
 
 @pytest.fixture

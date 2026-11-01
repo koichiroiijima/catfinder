@@ -12,6 +12,26 @@ export interface ImageResult {
   url: string
 }
 
+export interface ChatOptions {
+  reasoning_effort: string | null
+  temperature: number | null
+  max_tokens: number | null
+}
+
+export interface TokenUsage {
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  reasoning_tokens: number | null
+  cost: number | null
+}
+
+export interface ChatOptionInput {
+  reasoning_effort: string
+  temperature: string
+  max_tokens: string
+}
+
 export interface AnalysisSummary {
   id: string
   status: AnalysisStatus
@@ -21,6 +41,8 @@ export interface AnalysisSummary {
   no_cat_count: number
   error_count: number
   model: string | null
+  options: ChatOptions
+  usage: TokenUsage | null
   images: ImageResult[]
 }
 
@@ -68,6 +90,7 @@ async function errorDetail(response: Response): Promise<string> {
 export async function createAnalysis(
   files: File[],
   model: string | null,
+  options: ChatOptionInput,
 ): Promise<AnalysisCreated> {
   const form = new FormData()
   for (const file of files) {
@@ -75,6 +98,18 @@ export async function createAnalysis(
   }
   if (model !== null && model !== '') {
     form.append('model', model)
+  }
+  const reasoningEffort = options.reasoning_effort.trim()
+  if (reasoningEffort !== '') {
+    form.append('reasoning_effort', reasoningEffort)
+  }
+  const temperature = options.temperature.trim()
+  if (temperature !== '') {
+    form.append('temperature', temperature)
+  }
+  const maxTokens = options.max_tokens.trim()
+  if (maxTokens !== '') {
+    form.append('max_tokens', maxTokens)
   }
 
   const response = await fetch('/api/analyses', {

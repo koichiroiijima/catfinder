@@ -15,11 +15,33 @@ from app.images import StoredImage
 from app.schemas import (
     AnalysisStatus,
     AnalysisSummary,
+    ChatOptions,
     ImageResult,
     ImageStatus,
+    TokenUsage,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _aggregate_usage(usages: list[TokenUsage | None]) -> TokenUsage | None:
+    present = [usage for usage in usages if usage is not None]
+    if not present:
+        return None
+
+    reasoning = [
+        usage.reasoning_tokens
+        for usage in present
+        if usage.reasoning_tokens is not None
+    ]
+    costs = [usage.cost for usage in present if usage.cost is not None]
+    return TokenUsage(
+        input_tokens=sum(usage.input_tokens for usage in present),
+        output_tokens=sum(usage.output_tokens for usage in present),
+        total_tokens=sum(usage.total_tokens for usage in present),
+        reasoning_tokens=sum(reasoning) if reasoning else None,
+        cost=sum(costs) if costs else None,
+    )
 
 
 @dataclass(slots=True)
@@ -34,6 +56,7 @@ class JobImage:
     confidence: float | None = None
     reason: str | None = None
     error: str | None = None
+    usage: TokenUsage | None = None
 
 
 @dataclass(slots=True)
@@ -42,6 +65,7 @@ class AnalysisJob:
     directory: Path
     created_at: float
     model: str | None = None
+    options: ChatOptions = field(default_factory=ChatOptions)
     status: AnalysisStatus = AnalysisStatus.QUEUED
     images: list[JobImage] = field(default_factory=list)
     task: asyncio.Task[None] | None = None
@@ -80,7 +104,11 @@ class AnalysisService:
     def analyzer_available(self) -> bool:
         return self._analyzer is not None
 
-    def new_job(self, model: str | None = None) -> AnalysisJob:
+    def new_job(
+        self,
+        model: str | None = None,
+        options: ChatOptions | None = None,
+    ) -> AnalysisJob:
         job_id = uuid.uuid4().hex
         directory = self._root / job_id
         directory.mkdir(parents=True, exist_ok=False)
@@ -89,6 +117,7 @@ class AnalysisService:
             directory=directory,
             created_at=time.monotonic(),
             model=model,
+            options=options if options is not None else ChatOptions(),
         )
         self._jobs[job_id] = job
         return job
@@ -133,10 +162,11 @@ class AnalysisService:
                 item.error = "LLM が設定されていません。"
                 return
             try:
-                verdict = await self._analyzer.analyze(
+                outcome = await self._analyzer.analyze(
                     item.path,
                     item.media_type,
                     model=job.model,
+                    options=job.options,
                 )
             except asyncio.CancelledError:
                 raise
@@ -146,6 +176,8 @@ class AnalysisService:
                 item.error = f"判定に失敗しました: {exc}"[:300]
                 return
 
+            item.usage = outcome.usage
+            verdict = outcome.verdict
             item.has_cat = verdict.has_cat
             item.confidence = verdict.confidence
             item.reason = verdict.reason
@@ -177,6 +209,8 @@ class AnalysisService:
             no_cat_count=no_cat_count,
             error_count=error_count,
             model=job.model,
+            options=job.options,
+            usage=_aggregate_usage([item.usage for item in job.images]),
             images=images,
         )
 

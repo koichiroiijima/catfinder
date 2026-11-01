@@ -3,10 +3,11 @@ from __future__ import annotations
 import io
 import os
 
+import pytest
 from PIL import Image
 
 from app.models import ModelCatalog
-from app.schemas import CatVerdict
+from app.schemas import CatVerdict, ChatOptions, TokenUsage
 from tests.conftest import FakeAnalyzer, client_for, make_image, wait_for_completion
 
 
@@ -81,6 +82,12 @@ def test_mixed_results_and_image_serving(settings):
         assert payload["cat_count"] == 1
         assert payload["no_cat_count"] == 1
         assert payload["error_count"] == 1
+        assert payload["options"] == {
+            "reasoning_effort": None,
+            "temperature": None,
+            "max_tokens": None,
+        }
+        assert payload["usage"] is None
 
         by_name = {item["filename"]: item for item in payload["images"]}
         assert by_name["cat.png"]["status"] == "cat"
@@ -225,6 +232,96 @@ def test_post_with_blank_model_falls_back_to_default(settings):
         assert response.status_code == 202
         payload = wait_for_completion(client, response.json()["id"])
         assert payload["model"] == "test-vision-model"
+
+
+def test_post_with_chat_options_forwards_them_to_analyzer(settings):
+    data = make_image()
+    analyzer = FakeAnalyzer(
+        verdicts={data: CatVerdict(has_cat=True, confidence=0.9, reason="猫。")}
+    )
+    with client_for(settings, analyzer, catalog=_catalog(settings)) as client:
+        response = client.post(
+            "/api/analyses",
+            data={
+                "reasoning_effort": "high",
+                "temperature": "0.2",
+                "max_tokens": "500",
+            },
+            files=[_upload("cat.png", data)],
+        )
+        assert response.status_code == 202
+
+        payload = wait_for_completion(client, response.json()["id"])
+        assert payload["options"] == {
+            "reasoning_effort": "high",
+            "temperature": 0.2,
+            "max_tokens": 500,
+        }
+        assert analyzer.options == [
+            ChatOptions(reasoning_effort="high", temperature=0.2, max_tokens=500)
+        ]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("reasoning_effort", "extreme", "推論の強さ"),
+        ("temperature", "2.1", "temperature"),
+        ("temperature", "abc", "temperature"),
+        ("max_tokens", "0", "max_tokens"),
+        ("max_tokens", "1.5", "max_tokens"),
+        ("max_tokens", "200001", "max_tokens"),
+    ],
+)
+def test_post_rejects_invalid_chat_options(settings, field, value, message):
+    data = make_image()
+    with client_for(settings, FakeAnalyzer(), catalog=_catalog(settings)) as client:
+        response = client.post(
+            "/api/analyses",
+            data={field: value},
+            files=[_upload("cat.png", data)],
+        )
+        assert response.status_code == 400
+        assert message in response.json()["detail"]
+
+
+def test_summary_aggregates_token_usage(settings):
+    cat = make_image((220, 80, 40))
+    no_cat = make_image((40, 80, 220))
+    analyzer = FakeAnalyzer(
+        verdicts={
+            cat: CatVerdict(has_cat=True, confidence=0.94, reason="猫。"),
+            no_cat: CatVerdict(has_cat=False, confidence=0.88, reason="猫なし。"),
+        },
+        usages={
+            cat: TokenUsage(
+                input_tokens=100,
+                output_tokens=20,
+                total_tokens=120,
+                reasoning_tokens=10,
+                cost=0.001,
+            ),
+            no_cat: TokenUsage(
+                input_tokens=80,
+                output_tokens=10,
+                total_tokens=90,
+                cost=0.0005,
+            ),
+        },
+    )
+    with client_for(settings, analyzer) as client:
+        created = client.post(
+            "/api/analyses",
+            files=[_upload("cat.png", cat), _upload("dog.png", no_cat)],
+        ).json()
+        payload = wait_for_completion(client, created["id"])
+
+        usage = payload["usage"]
+        assert usage["input_tokens"] == 180
+        assert usage["output_tokens"] == 30
+        assert usage["total_tokens"] == 210
+        assert usage["reasoning_tokens"] == 10
+        assert usage["cost"] == pytest.approx(0.0015)
 
 
 def test_unknown_job_returns_404(settings):

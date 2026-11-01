@@ -34,7 +34,7 @@ async def test_real_vision_model() -> None:
     analyzer = create_analyzer(Settings())
     assert analyzer is not None, "LLM_MODEL is not configured"
 
-    verdict = await analyzer.analyze(path, media_type)
-    assert isinstance(verdict.has_cat, bool)
-    assert 0 <= verdict.confidence <= 1
-    assert verdict.reason
+    outcome = await analyzer.analyze(path, media_type)
+    assert isinstance(outcome.verdict.has_cat, bool)
+    assert 0 <= outcome.verdict.confidence <= 1
+    assert outcome.verdict.reason

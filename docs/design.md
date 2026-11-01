@@ -41,14 +41,17 @@ FastAPI (app/main.py)
 1. UI がマウント時に `GET /api/models` を 1 回呼び、選択可能な vision モデルと
    既定値を取得する。
 2. UI が選択画像を `FormData` の `files` フィールドで、選択モデルを `model`
-   フィールドで `POST /api/analyses` に送る。
-3. API が枚数・サイズ・実データ形式を検証し、ジョブディレクトリへ UUID 名で保存する。
+   フィールドで、任意の API パラメータを `reasoning_effort` / `temperature` /
+   `max_tokens` フィールドで `POST /api/analyses` に送る。
+3. API が枚数・サイズ・実データ形式・パラメータを検証し、ジョブディレクトリへ
+   UUID 名で保存する。
 4. ジョブをメモリに登録し、`asyncio.create_task` で判定を開始して 202 を返す。
-5. 各画像はセマフォで同時実行数を制限しつつ、ジョブのモデルに対応する
-   LLM クライアントで 1 枚ずつ問い合わせる。
-6. UI は 1 秒間隔で `GET /api/analyses/{id}` をポーリングする。
-7. 全画像が終端状態になるとジョブは `completed` になり、ポーリングが止まる。
-8. TTL を過ぎたジョブはバックグラウンドのクリーンアップで削除される。
+5. 各画像はセマフォで同時実行数を制限しつつ、ジョブのモデルとパラメータに
+   対応する LLM クライアントで 1 枚ずつ問い合わせる。
+6. 判定結果と一緒に、プロバイダが返したトークン使用量を画像ごとに記録する。
+7. UI は 1 秒間隔で `GET /api/analyses/{id}` をポーリングする。
+8. 全画像が終端状態になるとジョブは `completed` になり、ポーリングが止まる。
+9. TTL を過ぎたジョブはバックグラウンドのクリーンアップで削除される。
 
 ## ジョブと画像の状態
 
@@ -74,16 +77,16 @@ pending ──> running ──> cat
 
 | ファイル | 責務 |
 | --- | --- |
-| `app/main.py` | `create_app()`、ルーティング、リクエスト検証、レスポンス変換 |
+| `app/main.py` | `create_app()`、ルーティング、リクエスト検証（API パラメータ含む）、レスポンス変換 |
 | `app/config.py` | `pydantic-settings` による環境変数読み込み |
 | `app/models.py` | 接続先 `/models` からの vision モデル一覧取得、キャッシュ、許可判定 |
 | `app/images.py` | 実データ検証、表示用ファイル名の無害化、一時保存 |
-| `app/analyzer.py` | LangChain メッセージ構築、構造化出力、JSON フォールバック、モデル別クライアントのキャッシュ |
-| `app/jobs.py` | ジョブ登録、並列実行、集計、削除、TTL クリーンアップ |
-| `app/schemas.py` | API と LLM 出力の Pydantic モデル |
-| `frontend/src/api.ts` | HTTP クライアントとエラー整形 |
-| `frontend/src/useAnalysis.ts` | アップロード、ポーリング、エラー状態 |
-| `frontend/src/App.tsx` | 画面状態、ファイル選択、モデル選択、フィルタ |
+| `app/analyzer.py` | LangChain メッセージ構築、構造化出力、JSON フォールバック、モデル・パラメータ別クライアントのキャッシュ、usage 抽出 |
+| `app/jobs.py` | ジョブ登録、並列実行、集計（usage 含む）、削除、TTL クリーンアップ |
+| `app/schemas.py` | API と LLM 出力の Pydantic モデル（`ChatOptions` / `TokenUsage` 含む） |
+| `frontend/src/api.ts` | HTTP クライアント、API パラメータの送信、エラー整形 |
+| `frontend/src/useAnalysis.ts` | アップロード（API パラメータ含む）、ポーリング、エラー状態 |
+| `frontend/src/App.tsx` | 画面状態、ファイル選択、モデル・API パラメータ選択、使用量表示、フィルタ |
 
 `create_app(settings, analyzer, catalog)` はテスト用の注入点である。
 本番では `create_analyzer(settings)` が `MultiModelCatAnalyzer` を組み立てる。
@@ -95,12 +98,14 @@ pending ──> running ──> cat
 
 ```python
 ChatOpenAI(
-    model=settings.llm_model,
+    model=model,
     base_url=settings.llm_base_url,
     api_key=settings.llm_api_key,
     timeout=settings.llm_timeout_seconds,
     max_retries=settings.llm_max_retries,
-    temperature=0,
+    temperature=options.temperature if options.temperature is not None else 0,
+    reasoning_effort=options.reasoning_effort,  # 指定時のみ
+    max_tokens=options.max_tokens,              # 指定時のみ
 )
 ```
 
@@ -110,8 +115,12 @@ ChatOpenAI(
   `LLM_BASE_URL` / `LLM_API_KEY` を併せて上書きする。
 - `LLM_MODEL` は「モデル選択が無い／失敗したときの既定値」であり、
   UI の「判定モデル」ではリクエストごとにモデルを上書きできる。
-- モデル 1 つにつき `ChatOpenAI` を 1 個生成し、`MultiModelCatAnalyzer` が
-  プロセス内にキャッシュする。判定構造（プロンプト・構造化出力）はモデル間で共有する。
+- UI の「詳細設定」で `reasoning_effort` / `temperature` / `max_tokens` を
+  リクエストごとに指定できる。未指定時は temperature 0、それ以外は
+  プロバイダ既定を使う。
+- `ChatOpenAI` はモデルと実効パラメータ（推論の強さ・temperature・max_tokens）
+  の組ごとに 1 個生成し、`MultiModelCatAnalyzer` がプロセス内にキャッシュする。
+  判定構造（プロンプト・構造化出力）はモデル間で共有する。
 - 選択肢の並び順は、無料モデルを先頭・以降 ID 順に並べ替える（既定値は常に最初）。
   vision 判定は `architecture` が存在しない接続先では保留（全部返す）、存在する
   場合は画像入力を明示的に表明するモデルのみ残す。
@@ -124,6 +133,14 @@ ChatOpenAI(
 - `reason` は日本語で返すようプロンプトで指示する。
 - `confidence` は 0–1 を基本とするが、0–100 や `"87%"` で返る場合も
   正規化して受け入れる。
+- 構造化出力は `include_raw=True` で呼び、raw の `AIMessage.usage_metadata` から
+  input / output / total / reasoning トークンを取得する。JSON 応答モードも同じ。
+- `LLM_STRUCTURED_OUTPUT=auto` で JSON フォールバックした場合は、構造化出力の
+  試行とフォールバックの usage を合算する。失敗した試行でもトークンを消費するため。
+- OpenRouter の `usage.cost` は raw の
+  `response_metadata["token_usage"]["cost"]` から取得し、ジョブ合計に加算する。
+- usage は判定に成功した画像のみ集計する。プロバイダが返さない場合は `null` にし、
+  UI では表示しない。
 - 1 枚ごとに 1 リクエスト。複数画像の一括送信はモデル互換性が下がるため行わない。
 
 ## 画像の検証と保存
@@ -152,6 +169,11 @@ ChatOpenAI(
   隠して既定モデルに任せ、UI エラーにはしない。
 - 選択モデルは送信時に `POST /api/analyses` の `model` フィールドへ渡す。
   結果画面はジョブが実際に使った `model` を表示する。
+- API パラメータは `ChatOptionInput`（空文字 = 未指定）で保持し、送信時だけ
+  `reasoning_effort` / `temperature` / `max_tokens` を `FormData` に追加する。
+  「詳細設定」は折りたたみで、既定は閉じた状態にする。
+- 結果画面はジョブが実際に使ったパラメータと、合計トークン数（取得できた場合は
+  コスト）を表示する。画像ごとの使用量は API では返さず、ジョブ合計のみ扱う。
 - アップロード後はサーバーが返す画像 URL を表示する。
 - ポーリングは `AbortController` と `setTimeout` で管理し、ジョブ変更・
   アンマウント時に停止する。

@@ -21,6 +21,18 @@ const completed = {
   no_cat_count: 1,
   error_count: 0,
   model: 'vision-x',
+  options: {
+    reasoning_effort: 'high',
+    temperature: 0.2,
+    max_tokens: 1000,
+  },
+  usage: {
+    input_tokens: 11000,
+    output_tokens: 1345,
+    total_tokens: 12345,
+    reasoning_tokens: 500,
+    cost: 0.0012,
+  },
   images: [
     {
       id: 'image-1',
@@ -80,12 +92,41 @@ describe('App', () => {
     expect(screen.getByText('猫は写っていません。')).toBeInTheDocument()
     expect(screen.getByText('確信度 91%')).toBeInTheDocument()
     expect(screen.getByText('判定モデル: vision-x')).toBeInTheDocument()
+    expect(
+      screen.getByText('設定: 推論: 高 / temperature: 0.2 / 最大出力: 1,000'),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/使用トークン: 12,345/)).toBeInTheDocument()
+    expect(screen.getByText(/コスト: \$0\.001200/)).toBeInTheDocument()
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/models')
     const postUrl = fetchMock.mock.calls[1]?.[0]
     expect(postUrl).toBe('/api/analyses')
     const body = postedForm(fetchMock, 1)
     expect(body?.get('model')).toBe('vision-x')
+    expect(body?.has('reasoning_effort')).toBe(false)
+    expect(body?.has('temperature')).toBe(false)
+    expect(body?.has('max_tokens')).toBe(false)
+  })
+
+  it('sends advanced chat options', async () => {
+    const fetchMock = vi.mocked(fetch)
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(modelCatalog))
+      .mockResolvedValueOnce(jsonResponse({ id: 'job-1', status: 'queued', total: 1 }, 202))
+      .mockResolvedValueOnce(jsonResponse(completed))
+
+    render(<App />)
+    fireEvent.change(screen.getByLabelText('推論の強さ'), { target: { value: 'high' } })
+    fireEvent.change(screen.getByLabelText('Temperature'), { target: { value: '0.2' } })
+    fireEvent.change(screen.getByLabelText('最大出力トークン'), { target: { value: '500' } })
+    selectFiles('cat.png')
+    fireEvent.click(screen.getByRole('button', { name: '判定する' }))
+
+    await screen.findByText('茶色の猫が写っています。')
+    const body = postedForm(fetchMock, 1)
+    expect(body?.get('reasoning_effort')).toBe('high')
+    expect(body?.get('temperature')).toBe('0.2')
+    expect(body?.get('max_tokens')).toBe('500')
   })
 
   it('sends the model chosen in the select', async () => {

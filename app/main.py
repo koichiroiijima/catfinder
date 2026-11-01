@@ -18,13 +18,74 @@ from app.schemas import (
     AnalysisCreated,
     AnalysisStatus,
     AnalysisSummary,
+    ChatOptions,
     HealthResponse,
     ModelsResponse,
+    ReasoningEffort,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
+
+MAX_TOKENS_LIMIT = 200_000
+
+
+def _parse_chat_options(
+    reasoning_effort: str | None,
+    temperature: str | None,
+    max_tokens: str | None,
+) -> ChatOptions:
+    """Validate optional form values and convert them to the job options."""
+    effort_value = (reasoning_effort or "").strip()
+    effort: ReasoningEffort | None = None
+    if effort_value:
+        try:
+            effort = ReasoningEffort(effort_value)
+        except ValueError as exc:
+            allowed = " / ".join(item.value for item in ReasoningEffort)
+            raise HTTPException(
+                status_code=400,
+                detail=f"推論の強さは {allowed} から選んでください。",
+            ) from exc
+
+    temperature_value: float | None = None
+    raw_temperature = (temperature or "").strip()
+    if raw_temperature:
+        try:
+            temperature_value = float(raw_temperature)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="temperature は 0〜2 の数値で指定してください。",
+            ) from exc
+        if not 0 <= temperature_value <= 2:
+            raise HTTPException(
+                status_code=400,
+                detail="temperature は 0〜2 の範囲で指定してください。",
+            )
+
+    max_tokens_value: int | None = None
+    raw_max_tokens = (max_tokens or "").strip()
+    if raw_max_tokens:
+        try:
+            max_tokens_value = int(raw_max_tokens)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"max_tokens は 1〜{MAX_TOKENS_LIMIT} の整数で指定してください。",
+            ) from exc
+        if not 1 <= max_tokens_value <= MAX_TOKENS_LIMIT:
+            raise HTTPException(
+                status_code=400,
+                detail=f"max_tokens は 1〜{MAX_TOKENS_LIMIT} の整数で指定してください。",
+            )
+
+    return ChatOptions(
+        reasoning_effort=effort,
+        temperature=temperature_value,
+        max_tokens=max_tokens_value,
+    )
 
 
 def create_app(
@@ -97,6 +158,18 @@ async def create_analysis(
         str | None,
         Form(description="Optional vision model id; defaults to LLM_MODEL"),
     ] = None,
+    reasoning_effort: Annotated[
+        str | None,
+        Form(description="Optional reasoning effort: none/minimal/low/medium/high"),
+    ] = None,
+    temperature: Annotated[
+        str | None,
+        Form(description="Optional sampling temperature between 0 and 2"),
+    ] = None,
+    max_tokens: Annotated[
+        str | None,
+        Form(description="Optional maximum number of output tokens"),
+    ] = None,
 ) -> AnalysisCreated:
     settings: Settings = request.app.state.settings
     service = get_service(request)
@@ -126,7 +199,8 @@ async def create_analysis(
             detail=f"一度に送信できる画像は {settings.max_files} 枚までです。",
         )
 
-    job = service.new_job(model)
+    options = _parse_chat_options(reasoning_effort, temperature, max_tokens)
+    job = service.new_job(model, options)
     try:
         for upload in selected:
             try:

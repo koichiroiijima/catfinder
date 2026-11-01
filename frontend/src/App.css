@@ -249,6 +249,59 @@ button.secondary:hover:not(:disabled) {
   color: var(--muted, #666);
 }
 
+.advanced-options {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fdfbf7;
+}
+
+.advanced-options summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.options-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 240px);
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 12px;
+}
+
+.options-grid label {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.options-grid select,
+.options-grid input {
+  padding: 6px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
+}
+
+.options-hint {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.options-used,
+.token-usage {
+  color: var(--muted, #666);
+  font-size: 13px;
+}
+
+.token-usage {
+  font-weight: 600;
+}
+
 .results-heading {
   align-items: center;
 }
@@ -490,5 +543,9 @@ button.secondary:hover:not(:disabled) {
 
   .count {
     min-width: 0;
+  }
+
+  .options-grid {
+    grid-template-columns: 1fr;
   }
 }

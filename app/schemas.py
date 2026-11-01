@@ -19,6 +19,32 @@ class AnalysisStatus(StrEnum):
     COMPLETED = "completed"
 
 
+class ReasoningEffort(StrEnum):
+    NONE = "none"
+    MINIMAL = "minimal"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class ChatOptions(BaseModel):
+    """Per-request chat completion parameters chosen in the UI."""
+
+    reasoning_effort: ReasoningEffort | None = None
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    max_tokens: int | None = Field(default=None, ge=1, le=200_000)
+
+
+class TokenUsage(BaseModel):
+    """Token counts reported by the provider for a successful verdict."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    reasoning_tokens: int | None = None
+    cost: float | None = None
+
+
 class CatVerdict(BaseModel):
     """The only shape accepted from the vision model."""
 
@@ -68,6 +94,8 @@ class AnalysisSummary(BaseModel):
     no_cat_count: int
     error_count: int
     model: str | None = None
+    options: ChatOptions = Field(default_factory=ChatOptions)
+    usage: TokenUsage | None = None
     images: list[ImageResult]
 
 

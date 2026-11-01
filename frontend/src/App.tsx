@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { deleteAnalysis, fetchModels } from './api'
+import {
+  deleteAnalysis,
+  fetchModels,
+  type ChatOptionInput,
+  type ChatOptions,
+} from './api'
 import { ResultGrid } from './components/ResultGrid'
 import { SummaryBar, type ResultFilter } from './components/SummaryBar'
 import { UploadPanel } from './components/UploadPanel'
@@ -20,12 +25,53 @@ function fileKey(file: File): string {
   return `${file.name}:${file.size}:${file.lastModified}`
 }
 
+const EFFORT_LABELS: Record<string, string> = {
+  none: 'なし',
+  minimal: '最小',
+  low: '低',
+  medium: '中',
+  high: '高',
+}
+
+function formatNumber(value: number): string {
+  return value.toLocaleString('ja-JP')
+}
+
+function formatCost(value: number): string {
+  if (value === 0) {
+    return '$0.00'
+  }
+  if (value < 0.01) {
+    return `$${value.toFixed(6)}`
+  }
+  return `$${value.toFixed(4)}`
+}
+
+function formatOptions(options: ChatOptions): string | null {
+  const parts: string[] = []
+  if (options.reasoning_effort) {
+    parts.push(`推論: ${EFFORT_LABELS[options.reasoning_effort] ?? options.reasoning_effort}`)
+  }
+  if (options.temperature !== null) {
+    parts.push(`temperature: ${options.temperature}`)
+  }
+  if (options.max_tokens !== null) {
+    parts.push(`最大出力: ${formatNumber(options.max_tokens)}`)
+  }
+  return parts.length > 0 ? parts.join(' / ') : null
+}
+
 export default function App() {
   const [selected, setSelected] = useState<SelectedImage[]>([])
   const [filter, setFilter] = useState<ResultFilter>('all')
   const [clientError, setClientError] = useState<string | null>(null)
   const [models, setModels] = useState<string[] | null>(null)
   const [model, setModel] = useState<string | null>(null)
+  const [chatOptions, setChatOptions] = useState<ChatOptionInput>({
+    reasoning_effort: '',
+    temperature: '',
+    max_tokens: '',
+  })
   const selectedRef = useRef<SelectedImage[]>([])
   const { jobId, summary, error, starting, start, reset } = useAnalysis()
 
@@ -130,7 +176,7 @@ export default function App() {
     }
     setFilter('all')
     setClientError(null)
-    await start(files, model)
+    await start(files, model, chatOptions)
   }
 
   const handleReset = async () => {
@@ -151,6 +197,7 @@ export default function App() {
   }
 
   const visibleError = clientError ?? error
+  const usedOptions = summary === null ? null : formatOptions(summary.options)
 
   return (
     <div className="app-shell">
@@ -178,7 +225,9 @@ export default function App() {
             disabled={starting}
             models={models}
             model={model}
+            options={chatOptions}
             onModelChange={setModel}
+            onOptionsChange={setChatOptions}
             onAdd={addFiles}
             onRemove={removeFile}
             onStart={handleStart}
@@ -194,6 +243,14 @@ export default function App() {
                     : `${summary.completed} / ${summary.total} 枚を判定しました。`}
                 </p>
                 {summary?.model && <p className="model-used">判定モデル: {summary.model}</p>}
+                {usedOptions && <p className="options-used">設定: {usedOptions}</p>}
+                {summary?.usage && (
+                  <p className="token-usage">
+                    使用トークン: {formatNumber(summary.usage.total_tokens)}
+                    {summary.usage.cost !== null &&
+                      `（コスト: ${formatCost(summary.usage.cost)}）`}
+                  </p>
+                )}
               </div>
               <button type="button" className="secondary" onClick={handleReset}>
                 別の画像で判定

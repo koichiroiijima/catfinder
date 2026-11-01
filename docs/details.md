@@ -18,6 +18,20 @@
   持たない、ネットワーク断など）はセレクトボックス自体を非表示にし、
   既定モデルでの送信に任せる。
 
+### 詳細設定
+
+折りたたみの「詳細設定」で、判定リクエストの API パラメータを指定できる。
+既定は閉じた状態で、未指定の項目は送信しない。
+
+| 項目 | 入力 | 未指定時 |
+| --- | --- | --- |
+| 推論の強さ | 既定 / なし / 最小 / 低 / 中 / 高 | プロバイダ既定 |
+| Temperature | 0〜2 の数値 | 0 |
+| 最大出力トークン | 1〜200000 の整数 | プロバイダ既定 |
+
+モデルやプロバイダが対応していないパラメータを指定すると、その画像の判定は
+エラーになる。エラー内容は結果カードに表示される。
+
 ### 判定中
 
 - 送信後は進捗バーと「n / m 枚を判定しました。」を表示する。
@@ -30,6 +44,11 @@
 - ステータスは「猫あり」「猫なし」「エラー」「判定中」「待機中」。
 - 集計は「猫あり」「猫なし」「エラー」の件数。
 - 使用したモデルを「判定モデル: <モデル名>」として表示する。
+- 指定した API パラメータを「設定: 推論: 高 / temperature: 0.2 / 最大出力: 1,000」
+  のように表示する。すべて未指定の場合は表示しない。
+- 判定に成功した画像の合計トークン数を「使用トークン: 12,345」として表示する。
+  プロバイダがコストを返した場合は「（コスト: $0.001200）」も併記する。
+  使用量が返らない場合は表示しない。
 - フィルタは「すべて」「猫あり」「猫なし」「エラー」。
 - エラー画像はエラー内容を表示する。
 
@@ -43,11 +62,24 @@
 `model` フィールド（任意）で使用する vision モデルを指定する。
 未指定・空文字の場合は `LLM_MODEL` が使われる。
 
+任意の API パラメータ:
+
+| フィールド | 型 | 値 | 未指定時 |
+| --- | --- | --- | --- |
+| `reasoning_effort` | 文字列 | `none` / `minimal` / `low` / `medium` / `high` | プロバイダ既定 |
+| `temperature` | 文字列（数値） | 0〜2 | 0 |
+| `max_tokens` | 文字列（整数） | 1〜200000 | プロバイダ既定 |
+
+空文字は未指定として扱う。
+
 ```bash
 curl -X POST http://127.0.0.1:8000/api/analyses \
   -F "files=@cat.jpg" \
   -F "files=@dog.png" \
-  -F "model=nvidia/nemotron-3.5-super-vl:free"
+  -F "model=nvidia/nemotron-3.5-super-vl:free" \
+  -F "reasoning_effort=high" \
+  -F "temperature=0.2" \
+  -F "max_tokens=1000"
 ```
 
 成功: `202 Accepted`
@@ -69,6 +101,9 @@ curl -X POST http://127.0.0.1:8000/api/analyses \
 | `400` | 画像として不正 | 画像として読み込めないファイルです。 |
 | `400` | 非対応形式 | JPEG / PNG / WebP のみ対応しています。 |
 | `400` | 未登録のモデル指定 | 対応していないモデルです。選択肢から選んでください。 |
+| `400` | 推論の強さが不正 | 推論の強さは none / minimal / low / medium / high から選んでください。 |
+| `400` | temperature が不正 | temperature は 0〜2 の範囲で指定してください。 |
+| `400` | max_tokens が不正 | max_tokens は 1〜200000 の整数で指定してください。 |
 | `413` | サイズ超過 | 画像が大きすぎます（上限 15MB）。 |
 | `503` | `LLM_MODEL` 未設定 | LLM が設定されていません。LLM_MODEL を設定してください。 |
 
@@ -86,6 +121,18 @@ curl -X POST http://127.0.0.1:8000/api/analyses \
   "no_cat_count": 0,
   "error_count": 0,
   "model": "nvidia/nemotron-3.5-super-vl:free",
+  "options": {
+    "reasoning_effort": "high",
+    "temperature": 0.2,
+    "max_tokens": 1000
+  },
+  "usage": {
+    "input_tokens": 1234,
+    "output_tokens": 56,
+    "total_tokens": 1290,
+    "reasoning_tokens": 12,
+    "cost": 0.00042
+  },
   "images": [
     {
       "id": "9a2b...",
@@ -113,6 +160,11 @@ curl -X POST http://127.0.0.1:8000/api/analyses \
 
 `status` は `queued` / `running` / `completed`。
 画像の `status` は `pending` / `running` / `cat` / `no_cat` / `error`。
+
+`options` はジョブ作成時に指定された API パラメータで、未指定の項目は `null`。
+`usage` は判定に成功した画像の合計で、プロバイダが使用量を返さない場合は `null`。
+`cost` は OpenRouter の `usage.cost` が取得できた場合のみ入る。画像ごとの
+使用量は返さない。
 
 存在しない ID は `404`:
 
@@ -166,7 +218,9 @@ API キーなどの秘密情報は返さない。
 `nvidia/nemotron-3.5-super-vl:free` を使う。`LLM_API_KEY` に OpenRouter の
 API キーが必要。モデルと接続先は `LLM_MODEL` / `LLM_BASE_URL` で差し替えられる。
 判定リクエストに `model` が指定された場合は、そのモデルを使う（未指定なら
-`LLM_MODEL`）。モデルごとの `ChatOpenAI` はアナライザー内にキャッシュされる。
+`LLM_MODEL`）。`reasoning_effort` / `temperature` / `max_tokens` はリクエスト
+ごとに上書きできる。モデルと実効パラメータの組ごとに `ChatOpenAI` を
+アナライザー内にキャッシュする。
 
 モデルには次の構造を要求する。
 
@@ -192,6 +246,12 @@ API キーが必要。モデルと接続先は `LLM_MODEL` / `LLM_BASE_URL` で�
 | `function_calling` | tool calling による構造化出力のみ |
 | `json` | 通常応答を JSON としてパース |
 
+使用量は LangChain の `AIMessage.usage_metadata` から取得する。構造化出力は
+`include_raw=True` で raw を取得し、`auto` の JSON フォールバック時は構造化出力と
+フォールバックの両方の試行分を合算する。OpenRouter の `usage.cost` は raw の
+`response_metadata["token_usage"]["cost"]` から取得する。プロバイダが使用量を
+返さない場合は `usage: null` になる。
+
 ## 制限値
 
 | 項目 | 既定値 | 環境変数 |
@@ -199,6 +259,7 @@ API キーが必要。モデルと接続先は `LLM_MODEL` / `LLM_BASE_URL` で�
 | 最大ファイル数 | 50 | `MAX_FILES` |
 | 最大ファイルサイズ | 15MB | `MAX_FILE_MB` |
 | 最大画素数 | 4000 万 | 固定（`app/images.py`） |
+| 最大出力トークン | 200000 | 固定（API 検証） |
 | LLM 同時実行数 | 4 | `LLM_CONCURRENCY` |
 | LLM タイムアウト | 60 秒 | `LLM_TIMEOUT_SECONDS` |
 | LLM リトライ | 2 回 | `LLM_MAX_RETRIES` |
@@ -218,7 +279,10 @@ uv run ruff check .
 - `tests/conftest.py` の `FakeAnalyzer` を注入するため、通常のテストは実 LLM を呼ばない。
 - API テストは `TestClient` の lifespan を起動し、バックグラウンド判定をポーリングする。
 - 対象: 正常系、部分失敗、入力検証、上限、404、削除、LLM 未設定、JSON フォールバック、
-  モデル指定（既定値・未登録モデルの 400・ジョブへのモデル記録）。
+  モデル指定（既定値・未登録モデルの 400・ジョブへのモデル記録）、
+  API パラメータ（転送・不正値の 400・ジョブへの記録）、使用量の集計と欠損時の `null`。
+- `tests/test_analyzer.py` は `usage_metadata` からのトークン・コスト抽出と、
+  フォールバック時の使用量合算も検証する。
 - `tests/test_models.py` は fetch 関数を差し替えてモデル一覧の取得・キャッシュ・
   フォールバックを検証する。実プロバイダへの接続は呼ばない。
 - 実モデルの確認は明示的に有効化する:
@@ -241,6 +305,7 @@ npm run build
 ```
 
 - `fetch` をモックし、アップロード→ポーリング→結果表示を検証する。
+- 「詳細設定」の値が `FormData` に載ること、使用トークン数・コストが表示されることも検証する。
 - `URL.createObjectURL` は `src/test/setup.ts` でモックする。
 - 文言を変更したら `src/App.test.tsx` の日本語セレクタも更新する。
 - `fetch` モックの先頭は `GET /api/models`（マウント時のモデル一覧取得）が
@@ -256,6 +321,9 @@ npm run build
 | 全画像がエラー | `LLM_BASE_URL`、`LLM_API_KEY`、モデルの vision 対応を確認。`.server.log` を見る |
 | OpenRouter で 401 / 403 | `LLM_API_KEY` に有効な OpenRouter のキーが設定されているか確認 |
 | 構造化出力で失敗する | `LLM_STRUCTURED_OUTPUT=json` を試す |
+| 詳細設定を指定すると全画像がエラー | モデル／プロバイダがそのパラメータに対応しているか確認。まず「既定」に戻す |
+| 使用トークン数が表示されない | プロバイダが `usage` を返しているか確認。返さない場合は `null` になる |
+| コストが表示されない | OpenRouter 以外は `usage.cost` を返さないことが多い |
 | UI から API に届かない | `scripts/server.sh status` と Vite の proxy 設定を確認 |
 | 画像が大きすぎる | `MAX_FILE_MB` を上げるか、クライアント側で縮小する |
 | 結果が消えた | 再起動または TTL 超過。履歴は保存されない |
@@ -266,4 +334,8 @@ npm run build
 - ジョブは単一プロセス内のみ。複数ワーカーで起動するとポーリング先と
   ジョブ保持プロセスが一致しない可能性がある（`uvicorn --workers 1` 前提）。
 - HEIC / AVIF / GIF 非対応。
+- 使用量はプロバイダ依存。判定に成功した画像のみ集計し、失敗したリクエストの
+  トークンは含まれない。画像ごとの使用量は API で返さない。
+- `reasoning_effort` は `none` / `minimal` / `low` / `medium` / `high` に固定。
+  OpenRouter の `xhigh` / `max` や `reasoning.max_tokens` は未対応。
 - 結果の永続化、個別画像の再判定、キャンセル UI は未実装。
