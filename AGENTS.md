@@ -35,12 +35,13 @@ scripts/ui.sh start|stop|restart|status       # UI : 5173
 
 ## 構造の要点
 
-- `app/main.py` の `create_app(settings, analyzer)` が組み立てとテスト注入点。
+- `app/main.py` の `create_app(settings, analyzer, catalog)` が組み立てとテスト注入点。
   モジュール末尾の `app = create_app()` は import 時に `.env` を読む。
 - ジョブ・判定結果・画像 (BLOB)・実行ログは SQLite (`app/storage.py`, `DATABASE_PATH`) に
   永続化する。自動削除はなく、`DELETE /api/analyses/{id}` でジョブごと削除する。
-- 実行中のジョブだけをメモリ (`app/jobs.py`) に持つ。完了後も `GET /api/analyses/{id}`
-  は SQLite から読める。再起動時に未完了ジョブは中断扱いにする。
+- 実行中のジョブはメモリ (`app/jobs.py`) にも保持する。履歴は SQLite から読むため、
+  プロセス再起動後も `GET /api/analyses/{id}` で同じ結果を取得できる。
+  再起動時に未完了ジョブは中断扱いにする。
 - 画像は Pillow で実データを検証し、UUID 名で作業ディレクトリに保存。DB には BLOB で
   保存し、完了後に作業ディレクトリを削除する。元のファイル名は表示専用。
 - 画面は `GET /api/analyses` の履歴から過去の判定を開ける。実行ログは
@@ -58,7 +59,8 @@ scripts/ui.sh start|stop|restart|status       # UI : 5173
 - フロントエンドは `/api` を相対パスで呼ぶ。Vite proxy 前提なので CORS を追加しない。
 - `frontend/src/useAnalysis.ts` が 1 秒ポーリング。`AbortController` と timer の後始末を壊さない。
 - 画像選択の object URL は追加時に生成し、削除・リセット・アンマウント時に revoke する。
-- ステータスと CSS クラスは `status-cat` / `status-no_cat` / `status-error` に対応する。
+- ステータスと CSS クラスは `status-cat` / `status-no_cat` / `status-error` /
+  `status-running` / `status-pending` に対応する。
 
 ## サブエージェント
 
@@ -69,16 +71,17 @@ scripts/ui.sh start|stop|restart|status       # UI : 5173
   `scripts/server.sh` / `scripts/ui.sh` の実行専用。start / stop / restart /
   status を引数の通りに実行して結果を報告する。解析・ファイル編集はしない。
 - `auto-commit-on-build` (`.opencode/plugins/auto-commit-on-build/index.ts`):
-  Build エージェントのセッションが `session.idle` になったとき、未コミット変更が
-  あれば `auto-committer` を子セッションで自動実行する。変更がなければ何もしない。
+  Build エージェントのトップレベルセッションが `session.idle` になったとき、
+  未コミット変更があれば `auto-committer` を子セッションで自動実行する。
+  変更がなければ何もしない。
   自動コミットを止めたい場合はこのプラグインを削除するか、`BUILD_AGENT` の判定を変える。
 
 ## 変更時の注意
 
 - API の形を変えたら `frontend/src/api.ts`、`tests/`、`docs/details.md` を同時に更新する。
 - UI 文言は日本語。`frontend/src/App.test.tsx` は日本語ラベルで要素を取得している。
-- 新しい環境変数は `.env.example`、`README.md`、`docs/details.md` に追加する。
-- 実装を変えたら `README.md` / `docs/design.md` / `docs/details.md` を追従させる。
+- 新しい環境変数は `.env.example`、`README.md`、`docs/design.md`、`docs/details.md` に追加する。
+- 実装を変えたら `README.md` / `docs/design.md` / `docs/details.md` / `handover.md` を追従させる。
 - 生成物をコミットしない: `.venv/`, `frontend/node_modules/`, `frontend/dist/`,
   `.pytest_cache/`, `.ruff_cache/`, `.env`, `*.pid`, `*.log`, `data/`（SQLite DB）, 一時画像。
 - DB スキーマを変えるときは `app/storage.py` に後方互換の `CREATE TABLE IF NOT EXISTS` /

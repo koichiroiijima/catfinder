@@ -1,10 +1,14 @@
 # 引き継ぎ
 
+次のセッションは本ファイル → `AGENTS.md` → `docs/design.md` → `docs/details.md`
+→ `README.md` の順に読む。
+
 ## 現状
 
 - FastAPI + LangChain（`ChatOpenAI`）のバックエンドと、React + Vite の UI を実装済み。
 - バックエンド 64 テスト（モデル一覧・モデル指定・API パラメータ・使用量集計・
-  ETA・並列数制御・SQLite 永続化・履歴/ログ・再起動復元を含む）、
+  ETA・並列数制御・SQLite 永続化・履歴/ログ・再起動復元・シャットダウン時の
+  中断を含む）、
   フロントエンド 13 テストが成功。実 LLM の結合テスト 1 件は既定でスキップ。
 - 判定リクエストは `LLM_CONCURRENCY`（既定 8、上限 32）で並列化済み。
   `asyncio.Semaphore` により同時 HTTP リクエスト数を制限する。
@@ -14,7 +18,8 @@
   「残り時間: 約 X 分（概算）」を表示する。完了 0 枚・完了後は `null`。
 - 判定ごとのモデル選択を実装済み。`GET /api/models` が接続先の `/models` から
   vision かつ `structured_outputs` 対応のモデルだけを取得し（600 秒キャッシュ、
-  失敗時は既定 1 つにフォールバック）、UI の「判定モデル」セレクトボックス →
+  キャッシュが無い状態での取得失敗時は既定 1 つにフォールバック）、UI の
+  「判定モデル」セレクトボックス →
   `POST /api/analyses` の `model` フィールドでジョブごとに使用モデルを
   切り替えられる。`LLM_MODEL` が一覧に無い場合は一覧の先頭が既定になる。
 - UI の「詳細設定」から `reasoning_effort` / `temperature` / `max_tokens` を
@@ -30,16 +35,31 @@
 - `GET /api/analyses`（履歴、`limit`/`offset`）と
   `GET /api/analyses/{id}/logs`（実行ログ）を追加済み。UI は「実行ログを表示」で
   ログを確認できる。
-- 再起動時に `queued` / `running` だったジョブは中断扱い（ジョブは completed、
-  未完了画像は error）にし、実行ログへ記録する。
+- 正常終了時は未完了画像を「判定が中断されました。」、異常終了後の次回起動時は
+  `recover_interrupted()` が `queued` / `running` のジョブを中断扱い
+  （ジョブは completed、未完了画像は「サーバー再起動により中断されました。」）に
+  し、実行ログへ記録する。
 - `.opencode/plugins/auto-commit-on-build` を追加。Build エージェントの
-  セッションが idle になるたび、未コミット変更がある場合に `auto-committer` を
-  子セッションで自動実行してコミットする（push はしない）。変更がなければ起動しない。
+  トップレベルセッションが idle になるたび、未コミット変更がある場合に
+  `auto-committer` を子セッションで自動実行してコミットする（push はしない）。
+  変更がなければ起動しない。
 - `npm run build`、`npm run lint`、`uv run ruff check .` が成功。
 - `scripts/server.sh` / `scripts/ui.sh` で起動・停止を確認済み。
 - `/api/health` と Vite proxy 経由の `/api/health` を確認済み。
 - OpenAI 互換のモックサーバーを使い、LangChain の構造化出力・画像送信・
   ジョブ完了・画像取得までを結合確認済み。
+
+## 検証コマンド
+
+```bash
+uv run pytest
+uv run ruff check .
+cd frontend && npm test
+cd frontend && npm run lint
+cd frontend && npm run build
+scripts/server.sh status
+scripts/ui.sh status
+```
 
 ## 未検証
 

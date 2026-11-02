@@ -15,9 +15,9 @@
 - 初期表示時に `GET /api/models` を 1 回呼び、「判定モデル」セレクトボックスで
   使用する vision + Structured Output 対応モデルを選択できる。
 - 既定値は `LLM_MODEL`。`LLM_MODEL` が一覧に無い場合は一覧の先頭が既定値に
-  なる。選択肢が取得できなかった場合（接続先が `/models` を持たない、
-  ネットワーク断など）はセレクトボックス自体を非表示にし、既定モデルでの
-  送信に任せる。
+  なる。`GET /api/models` 自体の取得に失敗した場合（API へのネットワーク断など）は
+  セレクトボックスを非表示にし、既定モデルでの送信に任せる。接続先の `/models`
+  取得に失敗した場合は、サーバーが既定モデル 1 件を返すため選択肢 1 件で表示される。
 - 一覧が空の場合もセレクトボックスを非表示にする。
 
 ### 詳細設定
@@ -41,7 +41,8 @@
 - 「残り時間: 約 X 分（概算）」を表示する。サーバーが `eta_seconds` を返すまでは
   「残り時間: 計算中…」。60 秒未満は「約 X 秒」、60 分未満は分単位、
   それ以上は時間＋分で表示する。ジョブ完了後は表示しない。
-- 「別の画像で判定」でサーバー上のジョブを削除して初期画面に戻る。
+- 「別の画像で判定」で初期画面に戻る。サーバー上のジョブは削除されず、
+  履歴に残る。
 
 ### 結果表示
 
@@ -116,10 +117,13 @@ curl -X POST http://127.0.0.1:8000/api/analyses \
 | `400` | ファイル 0 枚 | 画像を1枚以上選択してください。 |
 | `400` | 枚数超過 | 一度に送信できる画像は 500 枚までです。 |
 | `400` | 画像として不正 | 画像として読み込めないファイルです。 |
+| `400` | 空のファイル | 空のファイルです。 |
+| `400` | 画素数超過 | 画像の解像度が大きすぎます（上限 4000万画素）。 |
 | `400` | 非対応形式 | JPEG / PNG / WebP のみ対応しています。 |
 | `400` | 未登録のモデル指定 | 対応していないモデルです。Structured Output に対応した vision モデルを選択してください。 |
 | `400` | 推論の強さが不正 | 推論の強さは none / minimal / low / medium / high から選んでください。 |
-| `400` | temperature が不正 | temperature は 0〜2 の範囲で指定してください。 |
+| `400` | temperature が数値でない | temperature は 0〜2 の数値で指定してください。 |
+| `400` | temperature が範囲外 | temperature は 0〜2 の範囲で指定してください。 |
 | `400` | max_tokens が不正 | max_tokens は 1〜200000 の整数で指定してください。 |
 | `413` | サイズ超過 | 画像が大きすぎます（上限 15MB）。 |
 | `503` | `LLM_MODEL` 未設定 | LLM が設定されていません。LLM_MODEL を設定してください。 |
@@ -255,8 +259,8 @@ curl -X POST http://127.0.0.1:8000/api/analyses \
 ### `GET /api/analyses/{id}/images/{image_id}`
 
 SQLite に保存された画像（BLOB）を返す。`Content-Type` は JPEG / PNG / WebP の
-いずれか。ジョブまたは画像が存在しない場合は `404`。プロセス再起動後も同じ URL で
-取得できる。
+いずれか。`Cache-Control: private, max-age=300` を付ける。ジョブまたは画像が
+存在しない場合は `404`。プロセス再起動後も同じ URL で取得できる。
 
 ### `DELETE /api/analyses/{id}`
 
@@ -267,6 +271,7 @@ SQLite に保存された画像（BLOB）を返す。`Content-Type` は JPEG / P
 
 判定に使える vision + Structured Output 対応モデルの一覧。接続先
 （`LLM_BASE_URL`）の `GET /models` を呼び出し、次の両方を満たすモデルに絞る。
+`LLM_MODEL` が空の場合は接続先を呼び出さず、空の一覧を返す。
 
 - `architecture` で画像入力を明示的に表明している（vision）
 - `supported_parameters` に `structured_outputs` を含む（Structured Output）
@@ -289,7 +294,9 @@ SQLite に保存された画像（BLOB）を返す。`Content-Type` は JPEG / P
   （ログに警告を出す）。
 - 接続先の並びは、無料モデル（`pricing` の prompt / completion がともに 0）を
   先頭に、以降は ID 順に並べ替えてから、既定値を先頭へ移す。
-- 接続先の一覧取得に失敗した場合は、既定値だけを返して 200 にする（UI が壊れない）。
+- キャッシュが無い状態で接続先の一覧取得に失敗した場合は、既定値だけを返して
+  200 にする（UI が壊れない）。直前のキャッシュがある場合は、それを 60 秒間
+  使い続ける。
 - 利用可能なモデルが 0 件の場合は `models: []`, `default: ""` を返す。
 
 ### `GET /api/health`
@@ -298,6 +305,7 @@ SQLite に保存された画像（BLOB）を返す。`Content-Type` は JPEG / P
 { "status": "ok", "llm_configured": true, "model": "nvidia/nemotron-3.5-super-vl:free" }
 ```
 
+`LLM_MODEL` が空の場合は `llm_configured: false`, `model: ""` を返す。
 API キーなどの秘密情報は返さない。
 
 ## LLM 出力仕様
@@ -354,6 +362,7 @@ Structured Output に失敗した画像は、その画像だけ `error` にな�
 | LLM リトライ | 2 回 | `LLM_MAX_RETRIES` |
 | 履歴の保持 | 自動削除なし | 明示的な `DELETE` のみ |
 | SQLite ファイル | `./data/catfinder.db` | `DATABASE_PATH` |
+| 作業ディレクトリ | OS の一時ディレクトリ | `UPLOAD_DIR` |
 
 ## テスト
 
@@ -375,12 +384,14 @@ uv run ruff check .
 - 並列実行は `tests/test_api.py` の `ConcurrencyProbe` で、同時に走る判定が
   `llm_concurrency` を超えないことを検証する。
 - `tests/test_jobs.py` は `eta_seconds` の計算（完了 0 枚・全完了・開始時刻なしの
-  `null` を含む）を検証する。
+  `null` を含む）と、シャットダウン時に実行中の画像が「判定が中断されました。」で
+  `error` になることを検証する。
 - `tests/test_config.py` は `MAX_FILES` の既定値 500 と上限 500 を検証する。
 - `tests/test_storage.py` は SQLite の往復（ジョブ・画像 BLOB・使用量・ログ）、
   履歴の並びと集計、再起動時の中断処理、削除を検証する。
-- `tests/test_api.py` は履歴・実行ログの API と、アプリを再起動しても結果・画像が
-  取得できることを検証する。
+- `tests/test_api.py` は履歴・実行ログの API、履歴削除（`DELETE`）でジョブと
+  画像ファイルが消えること、アプリを再起動しても結果・画像が取得できることを
+  検証する。
 - `tests/test_analyzer.py` は `usage_metadata` からのトークン・コスト抽出、
   常に `json_schema` を使うこと、失敗時にフォールバックしないこと、
   OpenRouter 接続時の `require_parameters` 付与を検証する。
@@ -437,7 +448,7 @@ npm run build
 | 画像が大きすぎる | `MAX_FILE_MB` を上げるか、クライアント側で縮小する |
 | 履歴が表示されない | `DATABASE_PATH` の場所と書き込み権限、`GET /api/analyses` の応答を確認 |
 | 過去の画像が表示されない | ジョブが削除されていないか、`GET /api/analyses/{id}/images/{image_id}` を確認 |
-| 再起動後に実行中だったジョブがエラー | 仕様。未完了画像は「サーバー再起動により中断されました。」になる |
+| 再起動後に実行中だったジョブがエラー | 仕様。正常終了時は「判定が中断されました。」、異常終了後の再起動時は「サーバー再起動により中断されました。」になる |
 | DB が大きくなった | 履歴を DELETE するか、`DATABASE_PATH` のファイルサイズを確認 |
 
 ## 既知の制限
@@ -458,6 +469,10 @@ npm run build
 - 画像は最大 500 枚。合計サイズの上限はなく、500 枚 × 15MB で最大 7.5GB に
   なり得る。画像は SQLite に BLOB で残るため、`DATABASE_PATH` の空き容量に注意する。
 - UI は選択画像を一括で描画する。500 枚ではスクロールが重くなる可能性がある。
+- UI の上限（500 枚 / 1 枚 15MB）は `frontend/src/App.tsx` の固定値で、
+  `MAX_FILES` / `MAX_FILE_MB` を変更してもクライアント側の検証は追従しない。
+  サーバー側の設定は API を直接使う場合に反映される。
 - 履歴は自動削除しない。ページング API はあるが、UI は直近 50 件のみ表示する。
-- 実行ログは最大 1000 件まで返す。それ以上は古いものから切り捨てる。
+- 実行ログは古い順に最大 1000 件まで返す。1000 件を超えると新しいログは
+  取得できない。
 - 個別画像の再判定、キャンセル UI、履歴の検索は未実装。
