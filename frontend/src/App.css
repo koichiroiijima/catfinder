@@ -513,6 +513,107 @@ button.secondary:hover:not(:disabled) {
   text-align: center;
 }
 
+.history-panel {
+  margin-top: 20px;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: 0 18px 40px -32px rgba(60, 43, 20, 0.55);
+}
+
+.history-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.history-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.history-open {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fdfbf7;
+  color: var(--ink);
+  text-align: left;
+}
+
+.history-open:hover {
+  border-color: var(--accent);
+}
+
+.history-date {
+  font-weight: 600;
+}
+
+.history-model {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.history-counts {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.logs-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
+.logs-panel {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fdfbf7;
+}
+
+.logs-panel h3 {
+  margin: 0 0 10px;
+  font-size: 1rem;
+}
+
+.log-list {
+  display: grid;
+  gap: 6px;
+  max-height: 320px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.log-entry {
+  display: flex;
+  gap: 12px;
+  font-size: 0.85rem;
+}
+
+.log-entry time {
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.log-entry.log-error {
+  color: var(--error);
+}
+
 .site-footer {
   margin-top: 28px;
   color: var(--muted);

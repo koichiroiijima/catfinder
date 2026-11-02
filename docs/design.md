@@ -7,7 +7,7 @@
 
 ### 非目標
 
-- 画像の長期保存・履歴管理・ユーザーアカウント
+- ユーザーアカウント、認証、複数ユーザーごとの履歴分離
 - 猫の個体識別、品種判定、物体検出の座標出力
 - 大量画像（数千枚）を継続処理する分散キュー
 
@@ -21,8 +21,9 @@ React + Vite (frontend/)
   │  /api は Vite proxy で転送
   ▼
 FastAPI (app/main.py)
-  ├─ 画像検証・一時保存 (app/images.py)
-  ├─ インメモリ Job (app/jobs.py)
+  ├─ 画像検証・作業ディレクトリへの保存 (app/images.py)
+  ├─ ジョブ実行と実行ログ (app/jobs.py)
+  ├─ SQLite 永続化 (app/storage.py)
   ├─ モデル一覧の取得とキャッシュ (app/models.py)
   └─ LangChain ChatOpenAI (app/analyzer.py)
           │
@@ -34,25 +35,30 @@ FastAPI (app/main.py)
   `scripts/ui.sh` で起動する。
 - Vite の `server.proxy` が `/api` を `http://127.0.0.1:8000` に転送するため、
   開発時に CORS 設定は不要。本番も同一オリジンで配信する想定。
-- DB は使わない。ジョブと結果はプロセス内メモリ、画像は一時ディレクトリ。
+- ジョブ、判定結果、画像（BLOB）、実行ログは SQLite に保存する。プロセス内には
+  実行中のジョブだけを置き、完了後も履歴として SQLite から読み出せる。
 
 ## リクエストの流れ
 
-1. UI がマウント時に `GET /api/models` を 1 回呼び、選択可能な
-   vision + Structured Output 対応モデルと既定値を取得する。
+1. UI がマウント時に `GET /api/models` で選択可能な
+   vision + Structured Output 対応モデルと既定値を取得し、`GET /api/analyses` で
+   保存済みの履歴を取得する。
 2. UI が選択画像を `FormData` の `files` フィールドで、選択モデルを `model`
    フィールドで、任意の API パラメータを `reasoning_effort` / `temperature` /
    `max_tokens` フィールドで `POST /api/analyses` に送る。
 3. API が枚数・サイズ・実データ形式・パラメータを検証し、ジョブディレクトリへ
-   UUID 名で保存する。
+   UUID 名で保存する。各画像は SQLite に BLOB として登録する。
 4. ジョブをメモリに登録し、`asyncio.create_task` で判定を開始して 202 を返す。
 5. 各画像はセマフォで同時実行数（既定 8）を制限しつつ、ジョブのモデルと
    パラメータに対応する LLM クライアントで 1 枚ずつ並列に問い合わせる。
-6. 判定結果と一緒に、プロバイダが返したトークン使用量を画像ごとに記録する。
+6. 判定結果と一緒に、プロバイダが返したトークン使用量を画像ごとに記録し、
+   実行ログを SQLite に追記する。
 7. UI は 1 秒間隔で `GET /api/analyses/{id}` をポーリングし、進捗と
    残り時間の概算を受け取る。
 8. 全画像が終端状態になるとジョブは `completed` になり、ポーリングが止まる。
-9. TTL を過ぎたジョブはバックグラウンドのクリーンアップで削除される。
+   作業ディレクトリは削除し、以降は SQLite の画像を配信する。
+9. 履歴は自動削除しない。UI の履歴から `DELETE /api/analyses/{id}` を呼ぶと
+   ジョブ・画像・ログがまとめて削除される。
 
 ## ジョブと画像の状態
 
@@ -73,6 +79,9 @@ pending ──> running ──> cat
 - 画像 1 枚の失敗は `error` として記録し、ジョブ全体は継続する。
 - `completed` は「全画像が終端状態になった」ことを意味し、成功だけを意味しない。
 - `error_count` と `completed`（終端状態の数）を分けて返す。
+- プロセス再起動時に `queued` / `running` のジョブが残っていた場合は、
+  ジョブを `completed`、未完了の画像を `error`（「サーバー再起動により
+  中断されました。」）に更新し、実行ログにも記録する。
 
 ## 残り時間の概算
 
@@ -90,13 +99,15 @@ pending ──> running ──> cat
 | `app/main.py` | `create_app()`、ルーティング、リクエスト検証（API パラメータ含む）、レスポンス変換 |
 | `app/config.py` | `pydantic-settings` による環境変数読み込み |
 | `app/models.py` | 接続先 `/models` からの vision + Structured Output 対応モデル一覧取得、キャッシュ、許可判定 |
-| `app/images.py` | 実データ検証、表示用ファイル名の無害化、一時保存 |
+| `app/images.py` | 実データ検証、表示用ファイル名の無害化、作業ディレクトリへの保存 |
 | `app/analyzer.py` | LangChain メッセージ構築、`json_schema` 構造化出力、モデル・パラメータ別クライアントのキャッシュ、usage 抽出 |
-| `app/jobs.py` | ジョブ登録、並列実行、集計（usage・残り時間含む）、削除、TTL クリーンアップ |
-| `app/schemas.py` | API と LLM 出力の Pydantic モデル（`ChatOptions` / `TokenUsage` 含む） |
-| `frontend/src/api.ts` | HTTP クライアント、API パラメータの送信、エラー整形 |
-| `frontend/src/useAnalysis.ts` | アップロード（API パラメータ含む）、ポーリング、エラー状態 |
-| `frontend/src/App.tsx` | 画面状態、ファイル選択、モデル・API パラメータ選択、使用量表示、フィルタ |
+| `app/jobs.py` | ジョブ登録、並列実行、集計（usage・残り時間含む）、実行ログ、削除 |
+| `app/storage.py` | SQLite のスキーマ、ジョブ・画像 BLOB・実行ログの読み書き、再起動時の中断処理 |
+| `app/domain.py` | 実行中のジョブと画像のデータ構造 |
+| `app/schemas.py` | API と LLM 出力の Pydantic モデル（`ChatOptions` / `TokenUsage` / 履歴 / ログ含む） |
+| `frontend/src/api.ts` | HTTP クライアント、API パラメータの送信、履歴・実行ログ取得、エラー整形 |
+| `frontend/src/useAnalysis.ts` | アップロード（API パラメータ含む）、ポーリング、既存ジョブのオープン、エラー状態 |
+| `frontend/src/App.tsx` | 画面状態、ファイル選択、モデル・API パラメータ選択、履歴・実行ログ表示、フィルタ |
 
 `create_app(settings, analyzer, catalog)` はテスト用の注入点である。
 本番では `create_analyzer(settings)` が `MultiModelCatAnalyzer` を組み立てる。
@@ -163,18 +174,22 @@ ChatOpenAI(
 - 対応形式は JPEG / PNG / WebP。
 - 上限は 1 枚 15MB（`MAX_FILE_MB`）、4000 万画素、1 リクエスト 500 枚（`MAX_FILES`）。
 - 保存名は UUID。元のファイル名は表示専用で、パスには使わない。
-- `UPLOAD_DIR` 未指定時は `tempfile.mkdtemp(prefix="catfinder-")` を使う。
-- 結果表示のため、画像はジョブ削除または TTL まで保持する。
+- `UPLOAD_DIR` 未指定時は `tempfile.mkdtemp(prefix="catfinder-")` を作業ディレクトリに使う。
+- 画像は受け付けた時点で SQLite の `job_images.image`（BLOB）に保存する。
+  作業ディレクトリは判定中だけ使い、ジョブ完了時・削除時に削除する。
+- 結果表示は SQLite の BLOB を `Response` で返す。プロセス再起動後も同じ URL で取得できる。
 
-## 並列性とクリーンアップ
+## 並列性と永続化
 
 - `asyncio.Semaphore(LLM_CONCURRENCY)` で LLM 呼び出しを制限する（既定 8）。
 - ジョブ内の画像は `asyncio.gather` で並列処理する。全件を一斉送信せず、
   セマフォで実際の HTTP リクエスト数を抑える。
 - タイムアウトとリトライは LangChain / OpenAI クライアント側の設定に委ねる。
-- クリーンアップはアプリ起動時の lifespan で開始し、TTL の半分（5–60 秒）ごとに
-  期限切れジョブを削除する。
-- アプリ終了時は実行中タスクをキャンセルし、保存ディレクトリを削除する。
+- SQLite への読み書きは `asyncio.to_thread` で行い、イベントループを止めない。
+  書き込みは 1 本の `asyncio.Lock` で直列化する。
+- 履歴の自動削除はしない。`DELETE /api/analyses/{id}` で明示的に削除する。
+- アプリ終了時は実行中タスクをキャンセルし、実行中ジョブを中断状態に更新する。
+  履歴（SQLite）は保持し、作業ディレクトリだけを削除する。
 
 ## フロントエンドの状態
 
@@ -195,6 +210,12 @@ ChatOpenAI(
 - ポーリングは `AbortController` と `setTimeout` で管理し、ジョブ変更・
   アンマウント時に停止する。
 - 実行中は再送信と別ジョブへの遷移を無効化する。
+- マウント時に `GET /api/analyses` で履歴を取得し、初期画面の「過去の判定」に
+  表示する。履歴を選ぶと既存ジョブを開き、同じ結果画面で表示する。
+- 実行ログは「実行ログを表示」で `GET /api/analyses/{id}/logs` を呼び、
+  タイムスタンプ付きで表示する。ジョブを開き直したときは再取得する。
+- 「別の画像で判定」は履歴を削除しない。履歴の × だけが
+  `DELETE /api/analyses/{id}` を呼ぶ。
 - ステータスに対応する CSS クラスは `status-cat` / `status-no_cat` /
   `status-error` / `status-running` / `status-pending`。
 
@@ -204,12 +225,14 @@ ChatOpenAI(
 - アップロード画像は外部 LLM API に送信される。機密画像の利用可否は利用者が判断する。
 - エラーメッセージには LLM 例外の内容を含む（最大 300 文字）。ローカル用途の
   デバッグ性を優先した割り切りで、公開サービスにする場合はサニタイズが必要。
-- 結果はプロセス再起動で消える。永続化が必要になったら SQLite などを追加する。
+- 履歴・画像・実行ログは SQLite に残る。DB ファイルにはアップロード画像が
+  そのまま入るため、`DATABASE_PATH` のバックアップとアクセス権に注意する。
+- 履歴は自動削除しない。ディスク使用量は `data/catfinder.db` で増える。
 
 ## 拡張の候補
 
 - 失敗画像だけの再判定
 - SSE / WebSocket による進捗配信
-- 判定履歴の永続化と検索
+- 履歴の検索・ページング UI
 - 画像のクライアント側リサイズによる転送量削減
 - 複数モデルの比較・設定画面

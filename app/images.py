@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from fastapi import UploadFile
@@ -34,6 +34,7 @@ class StoredImage:
     path: Path
     media_type: str
     size_bytes: int
+    data: bytes = field(repr=False)
 
 
 def display_filename(raw: str | None) -> str:
@@ -90,6 +91,7 @@ def _store_image(
         path=path,
         media_type=media_type,
         size_bytes=len(data),
+        data=data,
     )
 
 

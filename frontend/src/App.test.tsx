@@ -98,6 +98,7 @@ describe('App', () => {
     const fetchMock = vi.mocked(fetch)
     fetchMock
       .mockResolvedValueOnce(jsonResponse(modelCatalog))
+      .mockResolvedValueOnce(jsonResponse({ analyses: [] }))
       .mockResolvedValueOnce(jsonResponse({ id: 'job-1', status: 'queued', total: 2 }, 202))
       .mockResolvedValueOnce(jsonResponse(completed))
 
@@ -119,9 +120,10 @@ describe('App', () => {
     expect(screen.getByText(/コスト: \$0\.001200/)).toBeInTheDocument()
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/models')
-    const postUrl = fetchMock.mock.calls[1]?.[0]
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/analyses')
+    const postUrl = fetchMock.mock.calls[2]?.[0]
     expect(postUrl).toBe('/api/analyses')
-    const body = postedForm(fetchMock, 1)
+    const body = postedForm(fetchMock, 2)
     expect(body?.get('model')).toBe('vision-x')
     expect(body?.has('reasoning_effort')).toBe(false)
     expect(body?.has('temperature')).toBe(false)
@@ -130,6 +132,7 @@ describe('App', () => {
 
   it('caps the selection at 500 images', () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(modelCatalog))
+      .mockResolvedValueOnce(jsonResponse({ analyses: [] }))
 
     render(<App />)
     selectFiles(...Array.from({ length: 501 }, (_, index) => `cat-${index}.png`))
@@ -141,6 +144,7 @@ describe('App', () => {
   it('shows a rough remaining time while running', async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(jsonResponse(modelCatalog))
+      .mockResolvedValueOnce(jsonResponse({ analyses: [] }))
       .mockResolvedValueOnce(jsonResponse({ id: 'job-1', status: 'queued', total: 2 }, 202))
       .mockResolvedValueOnce(jsonResponse(running))
       .mockResolvedValue(jsonResponse(running))
@@ -156,6 +160,7 @@ describe('App', () => {
     const withoutOptions = { ...completed, options: undefined }
     vi.mocked(fetch)
       .mockResolvedValueOnce(jsonResponse(modelCatalog))
+      .mockResolvedValueOnce(jsonResponse({ analyses: [] }))
       .mockResolvedValueOnce(jsonResponse({ id: 'job-1', status: 'queued', total: 2 }, 202))
       .mockResolvedValueOnce(jsonResponse(withoutOptions))
 
@@ -171,6 +176,7 @@ describe('App', () => {
     const fetchMock = vi.mocked(fetch)
     fetchMock
       .mockResolvedValueOnce(jsonResponse(modelCatalog))
+      .mockResolvedValueOnce(jsonResponse({ analyses: [] }))
       .mockResolvedValueOnce(jsonResponse({ id: 'job-1', status: 'queued', total: 1 }, 202))
       .mockResolvedValueOnce(jsonResponse(completed))
 
@@ -182,7 +188,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: '判定する' }))
 
     await screen.findByText('茶色の猫が写っています。')
-    const body = postedForm(fetchMock, 1)
+    const body = postedForm(fetchMock, 2)
     expect(body?.get('reasoning_effort')).toBe('high')
     expect(body?.get('temperature')).toBe('0.2')
     expect(body?.get('max_tokens')).toBe('500')
@@ -192,6 +198,7 @@ describe('App', () => {
     const fetchMock = vi.mocked(fetch)
     fetchMock
       .mockResolvedValueOnce(jsonResponse(modelCatalog))
+      .mockResolvedValueOnce(jsonResponse({ analyses: [] }))
       .mockResolvedValueOnce(jsonResponse({ id: 'job-1', status: 'queued', total: 2 }, 202))
       .mockResolvedValueOnce(jsonResponse(completed))
 
@@ -203,7 +210,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: '判定する' }))
 
     await screen.findByText('茶色の猫が写っています。')
-    expect(postedForm(fetchMock, 1)?.get('model')).toBe('vision-y')
+    expect(postedForm(fetchMock, 2)?.get('model')).toBe('vision-y')
     expect(screen.getByText('判定モデル: vision-x')).toBeInTheDocument()
   })
 
@@ -211,6 +218,7 @@ describe('App', () => {
     const fetchMock = vi.mocked(fetch)
     fetchMock
       .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(jsonResponse({ analyses: [] }))
       .mockResolvedValueOnce(jsonResponse({ id: 'job-1', status: 'queued', total: 1 }, 202))
       .mockResolvedValueOnce(jsonResponse(completed))
 
@@ -220,12 +228,13 @@ describe('App', () => {
 
     await screen.findByText('茶色の猫が写っています。')
     expect(screen.queryByLabelText('判定モデル')).not.toBeInTheDocument()
-    expect(postedForm(fetchMock, 1)?.has('model')).toBe(false)
+    expect(postedForm(fetchMock, 2)?.has('model')).toBe(false)
   })
 
   it('shows the server error and keeps the upload panel', async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(jsonResponse(modelCatalog))
+      .mockResolvedValueOnce(jsonResponse({ analyses: [] }))
       .mockResolvedValueOnce(
         jsonResponse({ detail: 'LLM が設定されていません。LLM_MODEL を設定してください。' }, 503),
       )
@@ -242,6 +251,7 @@ describe('App', () => {
   it('shows a Japanese message when the upload request fails', async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(jsonResponse(modelCatalog))
+      .mockResolvedValueOnce(jsonResponse({ analyses: [] }))
       .mockRejectedValueOnce(new TypeError('Failed to fetch'))
 
     render(<App />)
@@ -255,6 +265,7 @@ describe('App', () => {
   it('filters results by status', async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(jsonResponse(modelCatalog))
+      .mockResolvedValueOnce(jsonResponse({ analyses: [] }))
       .mockResolvedValueOnce(jsonResponse({ id: 'job-1', status: 'queued', total: 2 }, 202))
       .mockResolvedValueOnce(jsonResponse(completed))
 
@@ -271,9 +282,62 @@ describe('App', () => {
 
   it('ignores the model catalog failure without surfacing an error', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(modelCatalog))
+      .mockResolvedValueOnce(jsonResponse({ analyses: [] }))
 
     render(<App />)
     expect(await screen.findByLabelText('判定モデル')).toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('opens a past analysis from the persisted history', async () => {
+    const listItem = {
+      id: 'job-1',
+      status: 'completed',
+      total: 2,
+      cat_count: 1,
+      no_cat_count: 1,
+      error_count: 0,
+      model: 'vision-x',
+      created_at: 1700000000,
+      finished_at: 1700000010,
+    }
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(jsonResponse(modelCatalog))
+      .mockResolvedValueOnce(jsonResponse({ analyses: [listItem] }))
+      .mockResolvedValueOnce(jsonResponse(completed))
+
+    render(<App />)
+    expect(await screen.findByRole('heading', { name: '過去の判定' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /の判定結果を開く/ }))
+
+    expect(await screen.findByText('茶色の猫が写っています。')).toBeInTheDocument()
+    expect(screen.getByText('判定モデル: vision-x')).toBeInTheDocument()
+  })
+
+  it('shows persisted execution logs', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(jsonResponse(modelCatalog))
+      .mockResolvedValueOnce(jsonResponse({ analyses: [] }))
+      .mockResolvedValueOnce(jsonResponse({ id: 'job-1', status: 'queued', total: 2 }, 202))
+      .mockResolvedValueOnce(jsonResponse(completed))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          id: 'job-1',
+          logs: [
+            { id: 1, created_at: 1700000000, level: 'info', message: '判定を開始しました。' },
+            { id: 2, created_at: 1700000001, level: 'error', message: 'dog.png: エラー' },
+          ],
+        }),
+      )
+
+    render(<App />)
+    selectFiles('cat.png', 'dog.png')
+    fireEvent.click(screen.getByRole('button', { name: '判定する' }))
+    await screen.findByText('茶色の猫が写っています。')
+
+    fireEvent.click(screen.getByRole('button', { name: '実行ログを表示' }))
+
+    expect(await screen.findByText('判定を開始しました。')).toBeInTheDocument()
+    expect(screen.getByText('dog.png: エラー')).toBeInTheDocument()
   })
 })

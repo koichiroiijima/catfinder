@@ -3,9 +3,9 @@
 ## 現状
 
 - FastAPI + LangChain（`ChatOpenAI`）のバックエンドと、React + Vite の UI を実装済み。
-- バックエンド 50 テスト（モデル一覧・モデル指定・API パラメータ・使用量集計・
-  ETA・並列数制御を含む）、フロントエンド 10 テストが成功。
-  実 LLM の結合テスト 1 件は既定でスキップ。
+- バックエンド 64 テスト（モデル一覧・モデル指定・API パラメータ・使用量集計・
+  ETA・並列数制御・SQLite 永続化・履歴/ログ・再起動復元を含む）、
+  フロントエンド 13 テストが成功。実 LLM の結合テスト 1 件は既定でスキップ。
 - 判定リクエストは `LLM_CONCURRENCY`（既定 8、上限 32）で並列化済み。
   `asyncio.Semaphore` により同時 HTTP リクエスト数を制限する。
 - 画像は UI・API とも 1 リクエスト 500 枚まで（`MAX_FILES`、上限 500）。
@@ -24,6 +24,17 @@
   JSON パースへのフォールバックはない。OpenRouter 接続時は
   `provider.require_parameters` で Structured Output 対応 endpoint に限定する。
   結果画面にはジョブ合計の使用トークン数と、OpenRouter が返す場合のみコストを表示する。
+- ジョブ・判定結果・画像 (BLOB)・実行ログを SQLite (`DATABASE_PATH`、既定
+  `./data/catfinder.db`) に保存する。UI の「過去の判定」からブラウザを閉じた後や
+  API 再起動後でも結果を開ける。履歴の自動削除はなく、× で明示的に削除する。
+- `GET /api/analyses`（履歴、`limit`/`offset`）と
+  `GET /api/analyses/{id}/logs`（実行ログ）を追加済み。UI は「実行ログを表示」で
+  ログを確認できる。
+- 再起動時に `queued` / `running` だったジョブは中断扱い（ジョブは completed、
+  未完了画像は error）にし、実行ログへ記録する。
+- `.opencode/plugins/auto-commit-on-build` を追加。Build エージェントの
+  セッションが idle になるたび、未コミット変更がある場合に `auto-committer` を
+  子セッションで自動実行してコミットする（push はしない）。変更がなければ起動しない。
 - `npm run build`、`npm run lint`、`uv run ruff check .` が成功。
 - `scripts/server.sh` / `scripts/ui.sh` で起動・停止を確認済み。
 - `/api/health` と Vite proxy 経由の `/api/health` を確認済み。
@@ -52,7 +63,11 @@
   エラーとして正しく記録されるか。
 - 実ブラウザでのドラッグ＆ドロップと大量画像時の操作性。
 - 500 枚を選択したときの UI 描画・スクロール性能と、アップロード時間。
-- 500 枚アップロード時のディスク使用量（最大 7.5GB）と `UPLOAD_DIR` の空き容量。
+- 500 枚アップロード時の SQLite (`DATABASE_PATH`) のサイズ・書き込み時間。
+  画像は BLOB で残るため最大 7.5GB 程度になり得る。
+- 大量の履歴がある状態での `GET /api/analyses` と UI の表示性能
+  （UI は直近 50 件のみ表示）。
+- 実ブラウザでの履歴オープン・実行ログ表示・履歴削除の操作。
 - `eta_seconds` の実測精度。画像サイズやモデルの応答時間がばらつくと大きく
   ずれるため、実 LLM で数ジョブ流して確認する。
 - `LLM_CONCURRENCY=8` でプロバイダのレート制限（429）に当たらないか。
@@ -64,14 +79,15 @@
 1. 実 LLM での結合確認とプロンプト調整
 2. 失敗画像だけの再判定
 3. SSE による進捗配信
-4. 履歴が必要になった場合の SQLite 導入
+4. 履歴の検索・ページング UI、保持期間/容量の設定
 5. クライアント側での画像リサイズ
 6. 画像ごとの使用量表示、コスト上限、モデル別の対応パラメータ表示
 7. ETA の精度改善（画像サイズ・過去の実績を加味する）
 
 ## 注意
 
-- 結果はインメモリ。再起動で消える。
+- 結果・画像・実行ログは SQLite に残る。`data/` はコミットしない。
+- 履歴は自動削除しない。DB の容量は `data/catfinder.db` を確認する。
 - `LLM_MODEL` 未設定時は判定 API が 503 を返す（起動自体は成功する）。
 - テストは `FakeAnalyzer` を使うため、実 API キーは不要。
 - ローカルの `.env` は `LLM_CONCURRENCY=8` に更新済み。`.env` はコミットしない。

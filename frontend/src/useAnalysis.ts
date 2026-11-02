@@ -23,6 +23,7 @@ export interface AnalysisController {
   error: string | null
   starting: boolean
   start: (files: File[], model: string | null, options: ChatOptionInput) => Promise<void>
+  open: (id: string) => void
   reset: () => void
 }
 
@@ -48,6 +49,12 @@ export function useAnalysis(): AnalysisController {
     },
     [],
   )
+
+  const open = useCallback((id: string) => {
+    setError(null)
+    setSummary(null)
+    setJobId(id)
+  }, [])
 
   const reset = useCallback(() => {
     setJobId(null)
@@ -93,5 +100,5 @@ export function useAnalysis(): AnalysisController {
     }
   }, [jobId])
 
-  return { jobId, summary, error, starting, start, reset }
+  return { jobId, summary, error, starting, start, open, reset }
 }

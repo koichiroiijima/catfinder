@@ -11,7 +11,7 @@ htmlcov/
 .env
 .env.local
 
-# Runtime artifacts (jobs are in-memory; uploads live in a temp directory by default)
+# Runtime artifacts (the SQLite database lives in data/; uploads use a temp directory)
 *.pid
 *.log
 data/

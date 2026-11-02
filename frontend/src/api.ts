@@ -53,6 +53,30 @@ export interface AnalysisCreated {
   total: number
 }
 
+export interface AnalysisListItem {
+  id: string
+  status: AnalysisStatus
+  total: number
+  cat_count: number
+  no_cat_count: number
+  error_count: number
+  model: string | null
+  created_at: number
+  finished_at: number | null
+}
+
+export interface LogEntry {
+  id: number
+  created_at: number
+  level: string
+  message: string
+}
+
+export interface AnalysisLogs {
+  id: string
+  logs: LogEntry[]
+}
+
 export class ApiError extends Error {
   readonly status: number
 
@@ -132,6 +156,26 @@ export async function getAnalysis(
     throw new ApiError(await errorDetail(response), response.status)
   }
   return (await response.json()) as AnalysisSummary
+}
+
+export async function listAnalyses(signal?: AbortSignal): Promise<AnalysisListItem[]> {
+  const response = await fetch('/api/analyses', { signal })
+  if (!response.ok) {
+    throw new ApiError(await errorDetail(response), response.status)
+  }
+  const payload = (await response.json()) as { analyses: AnalysisListItem[] }
+  return payload.analyses
+}
+
+export async function getAnalysisLogs(
+  id: string,
+  signal?: AbortSignal,
+): Promise<AnalysisLogs> {
+  const response = await fetch(`/api/analyses/${encodeURIComponent(id)}/logs`, { signal })
+  if (!response.ok) {
+    throw new ApiError(await errorDetail(response), response.status)
+  }
+  return (await response.json()) as AnalysisLogs
 }
 
 export async function deleteAnalysis(id: string): Promise<void> {

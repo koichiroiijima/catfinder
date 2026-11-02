@@ -106,6 +106,36 @@ class AnalysisCreated(BaseModel):
     total: int
 
 
+class AnalysisListItem(BaseModel):
+    """One row in the persisted analysis history."""
+
+    id: str
+    status: AnalysisStatus
+    total: int
+    cat_count: int
+    no_cat_count: int
+    error_count: int
+    model: str | None = None
+    created_at: float
+    finished_at: float | None = None
+
+
+class AnalysisListResponse(BaseModel):
+    analyses: list[AnalysisListItem]
+
+
+class LogEntry(BaseModel):
+    id: int
+    created_at: float
+    level: str
+    message: str
+
+
+class AnalysisLogs(BaseModel):
+    id: str
+    logs: list[LogEntry]
+
+
 class ModelsResponse(BaseModel):
     """Vision models offered by the configured OpenAI-compatible provider."""
 

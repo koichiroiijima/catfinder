@@ -1,13 +1,21 @@
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import (
+    APIRouter,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 
 from app.analyzer import CatAnalyzer, create_analyzer
 from app.config import Settings
@@ -16,6 +24,8 @@ from app.jobs import AnalysisService
 from app.models import ModelCatalog
 from app.schemas import (
     AnalysisCreated,
+    AnalysisListResponse,
+    AnalysisLogs,
     AnalysisStatus,
     AnalysisSummary,
     ChatOptions,
@@ -100,16 +110,13 @@ def create_app(
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         service = AnalysisService(app_settings, app_analyzer)
+        await service.initialize()
         app.state.settings = app_settings
         app.state.service = service
         app.state.catalog = app_catalog
-        cleanup_task = asyncio.create_task(service.cleanup_loop())
         try:
             yield
         finally:
-            cleanup_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await cleanup_task
             await service.shutdown()
 
     app = FastAPI(
@@ -212,7 +219,7 @@ async def create_analysis(
         )
 
     options = _parse_chat_options(reasoning_effort, temperature, max_tokens)
-    job = service.new_job(model, options)
+    job = await service.new_job(model, options)
     try:
         for upload in selected:
             try:
@@ -223,7 +230,7 @@ async def create_analysis(
                 )
             except ImageValidationError as exc:
                 raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
-            service.attach_image(job, image)
+            await service.attach_image(job, image)
     except Exception:
         await service.delete(job.id)
         raise
@@ -239,29 +246,48 @@ async def create_analysis(
     )
 
 
+@router.get("/analyses", response_model=AnalysisListResponse)
+async def list_analyses(
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> AnalysisListResponse:
+    service = get_service(request)
+    return AnalysisListResponse(analyses=await service.history(limit=limit, offset=offset))
+
+
 @router.get("/analyses/{job_id}", response_model=AnalysisSummary)
 async def get_analysis(request: Request, job_id: str) -> AnalysisSummary:
     service = get_service(request)
-    job = service.get(job_id)
+    job = await service.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="解析ジョブが見つかりません。")
     return service.summary(job)
 
 
-@router.get("/analyses/{job_id}/images/{image_id}")
-async def get_analysis_image(request: Request, job_id: str, image_id: str) -> FileResponse:
+@router.get("/analyses/{job_id}/logs", response_model=AnalysisLogs)
+async def get_analysis_logs(request: Request, job_id: str) -> AnalysisLogs:
     service = get_service(request)
-    job = service.get(job_id)
+    job = await service.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="解析ジョブが見つかりません。")
+    return AnalysisLogs(id=job.id, logs=await service.logs(job.id))
+
+
+@router.get("/analyses/{job_id}/images/{image_id}")
+async def get_analysis_image(request: Request, job_id: str, image_id: str) -> Response:
+    service = get_service(request)
+    job = await service.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="解析ジョブが見つかりません。")
 
-    image = next((item for item in job.images if item.id == image_id), None)
-    if image is None or not image.path.is_file():
+    image = await service.image_bytes(job_id, image_id)
+    if image is None:
         raise HTTPException(status_code=404, detail="画像が見つかりません。")
-
-    return FileResponse(
-        image.path,
-        media_type=image.media_type,
+    data, media_type = image
+    return Response(
+        content=data,
+        media_type=media_type,
         headers={"Cache-Control": "private, max-age=300"},
     )
 

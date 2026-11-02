@@ -30,13 +30,21 @@ scripts/ui.sh start|stop|restart|status       # UI : 5173
 - `.env` はコミットしない。テンプレートは `.env.example`。
 - `LLM_MODEL` 未設定でも起動できる。判定 API は 503、`GET /api/health` で設定有無を確認。
 - `.env` は pydantic-settings がカレントディレクトリから読む。サーバーはリポジトリルートで起動する。
+- `DATABASE_PATH`（既定 `./data/catfinder.db`）に履歴・画像・実行ログが残る。
+  テストは `tmp_path` の DB を使うため、ローカルの履歴を汚さない。
 
 ## 構造の要点
 
 - `app/main.py` の `create_app(settings, analyzer)` が組み立てとテスト注入点。
   モジュール末尾の `app = create_app()` は import 時に `.env` を読む。
-- ジョブはインメモリ (`app/jobs.py`)。DB・マイグレーションはない。TTL で画像ごと削除。
-- 画像は Pillow で実データを検証し、UUID 名で一時保存。元のファイル名は表示専用。
+- ジョブ・判定結果・画像 (BLOB)・実行ログは SQLite (`app/storage.py`, `DATABASE_PATH`) に
+  永続化する。自動削除はなく、`DELETE /api/analyses/{id}` でジョブごと削除する。
+- 実行中のジョブだけをメモリ (`app/jobs.py`) に持つ。完了後も `GET /api/analyses/{id}`
+  は SQLite から読める。再起動時に未完了ジョブは中断扱いにする。
+- 画像は Pillow で実データを検証し、UUID 名で作業ディレクトリに保存。DB には BLOB で
+  保存し、完了後に作業ディレクトリを削除する。元のファイル名は表示専用。
+- 画面は `GET /api/analyses` の履歴から過去の判定を開ける。実行ログは
+  `GET /api/analyses/{id}/logs` で取得する。
 - `app/analyzer.py` は LangChain の標準 content block で base64 画像を送信し、
   `CatVerdict` に常に `json_schema` の structured output で出力させる。
   JSON パースへのフォールバックはない。
@@ -60,6 +68,10 @@ scripts/ui.sh start|stop|restart|status       # UI : 5173
 - `script-runner` (`.opencode/agents/script-runner.md`):
   `scripts/server.sh` / `scripts/ui.sh` の実行専用。start / stop / restart /
   status を引数の通りに実行して結果を報告する。解析・ファイル編集はしない。
+- `auto-commit-on-build` (`.opencode/plugins/auto-commit-on-build/index.ts`):
+  Build エージェントのセッションが `session.idle` になったとき、未コミット変更が
+  あれば `auto-committer` を子セッションで自動実行する。変更がなければ何もしない。
+  自動コミットを止めたい場合はこのプラグインを削除するか、`BUILD_AGENT` の判定を変える。
 
 ## 変更時の注意
 
@@ -68,7 +80,9 @@ scripts/ui.sh start|stop|restart|status       # UI : 5173
 - 新しい環境変数は `.env.example`、`README.md`、`docs/details.md` に追加する。
 - 実装を変えたら `README.md` / `docs/design.md` / `docs/details.md` を追従させる。
 - 生成物をコミットしない: `.venv/`, `frontend/node_modules/`, `frontend/dist/`,
-  `.pytest_cache/`, `.ruff_cache/`, `.env`, `*.pid`, `*.log`, 一時画像。
+  `.pytest_cache/`, `.ruff_cache/`, `.env`, `*.pid`, `*.log`, `data/`（SQLite DB）, 一時画像。
+- DB スキーマを変えるときは `app/storage.py` に後方互換の `CREATE TABLE IF NOT EXISTS` /
+  列追加を入れ、既存 `data/catfinder.db` を壊さない。
 
 ## 関連ドキュメント
 

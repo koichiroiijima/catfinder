@@ -1,11 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   deleteAnalysis,
   fetchModels,
+  getAnalysisLogs,
+  listAnalyses,
+  type AnalysisListItem,
   type ChatOptionInput,
   type ChatOptions,
+  type LogEntry,
 } from './api'
+import { HistoryList } from './components/HistoryList'
 import { ResultGrid } from './components/ResultGrid'
 import { SummaryBar, type ResultFilter } from './components/SummaryBar'
 import { UploadPanel } from './components/UploadPanel'
@@ -89,8 +94,13 @@ export default function App() {
     temperature: '',
     max_tokens: '',
   })
+  const [history, setHistory] = useState<AnalysisListItem[]>([])
+  const [historyVersion, setHistoryVersion] = useState(0)
+  const [showLogs, setShowLogs] = useState(false)
+  const [logs, setLogs] = useState<LogEntry[] | null>(null)
+  const [logsError, setLogsError] = useState<string | null>(null)
   const selectedRef = useRef<SelectedImage[]>([])
-  const { jobId, summary, error, starting, start, reset } = useAnalysis()
+  const { jobId, summary, error, starting, start, open, reset } = useAnalysis()
 
   useEffect(() => {
     const controller = new AbortController()
@@ -107,6 +117,20 @@ export default function App() {
       controller.abort()
     }
   }, [])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    listAnalyses(controller.signal)
+      .then(setHistory)
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setHistory([])
+        }
+      })
+    return () => {
+      controller.abort()
+    }
+  }, [historyVersion])
 
   const files = useMemo(() => selected.map((item) => item.file), [selected])
   const previews = useMemo(() => selected.map((item) => item.preview), [selected])
@@ -193,17 +217,37 @@ export default function App() {
     }
     setFilter('all')
     setClientError(null)
+    setShowLogs(false)
+    setLogs(null)
+    setLogsError(null)
     await start(files, model, chatOptions)
   }
 
-  const handleReset = async () => {
-    if (jobId !== null) {
-      try {
-        await deleteAnalysis(jobId)
-      } catch {
-        // The server may already have discarded the job; local reset still wins.
-      }
+  const handleOpenHistory = (id: string) => {
+    setFilter('all')
+    setClientError(null)
+    setShowLogs(false)
+    setLogs(null)
+    setLogsError(null)
+    open(id)
+  }
+
+  const handleDeleteHistory = async (id: string) => {
+    try {
+      await deleteAnalysis(id)
+    } catch {
+      // Already removed; refreshing the list is still the right outcome.
     }
+    if (jobId === id) {
+      reset()
+      setShowLogs(false)
+      setLogs(null)
+      setLogsError(null)
+    }
+    setHistoryVersion((value) => value + 1)
+  }
+
+  const handleNewAnalysis = () => {
     for (const item of selected) {
       URL.revokeObjectURL(item.preview)
     }
@@ -211,7 +255,32 @@ export default function App() {
     setSelected([])
     setFilter('all')
     setClientError(null)
+    setShowLogs(false)
+    setLogs(null)
+    setLogsError(null)
+    setHistoryVersion((value) => value + 1)
   }
+
+  const handleToggleLogs = useCallback(async () => {
+    if (showLogs) {
+      setShowLogs(false)
+      return
+    }
+    setShowLogs(true)
+    if (jobId === null) {
+      return
+    }
+    setLogsError(null)
+    setLogs(null)
+    try {
+      const result = await getAnalysisLogs(jobId)
+      setLogs(result.logs)
+    } catch (caught) {
+      setLogsError(
+        caught instanceof Error ? caught.message : '実行ログを取得できませんでした。',
+      )
+    }
+  }, [jobId, showLogs])
 
   const visibleError = clientError ?? error
   const usedOptions = summary === null ? null : formatOptions(summary.options)
@@ -235,20 +304,27 @@ export default function App() {
         )}
 
         {jobId === null ? (
-          <UploadPanel
-            files={files}
-            previews={previews}
-            starting={starting}
-            disabled={starting}
-            models={models}
-            model={model}
-            options={chatOptions}
-            onModelChange={setModel}
-            onOptionsChange={setChatOptions}
-            onAdd={addFiles}
-            onRemove={removeFile}
-            onStart={handleStart}
-          />
+          <>
+            <UploadPanel
+              files={files}
+              previews={previews}
+              starting={starting}
+              disabled={starting}
+              models={models}
+              model={model}
+              options={chatOptions}
+              onModelChange={setModel}
+              onOptionsChange={setChatOptions}
+              onAdd={addFiles}
+              onRemove={removeFile}
+              onStart={handleStart}
+            />
+            <HistoryList
+              items={history}
+              onOpen={handleOpenHistory}
+              onDelete={handleDeleteHistory}
+            />
+          </>
         ) : (
           <section className="results-view" aria-labelledby="results-heading">
             <div className="results-heading">
@@ -277,7 +353,7 @@ export default function App() {
                   </p>
                 )}
               </div>
-              <button type="button" className="secondary" onClick={handleReset}>
+              <button type="button" className="secondary" onClick={handleNewAnalysis}>
                 別の画像で判定
               </button>
             </div>
@@ -311,12 +387,49 @@ export default function App() {
                 />
               </>
             )}
+
+            <div className="logs-actions">
+              <button
+                type="button"
+                className="secondary"
+                onClick={handleToggleLogs}
+                disabled={summary === null}
+              >
+                {showLogs ? '実行ログを閉じる' : '実行ログを表示'}
+              </button>
+            </div>
+
+            {showLogs && (
+              <section className="logs-panel" aria-labelledby="logs-heading">
+                <h3 id="logs-heading">実行ログ</h3>
+                {logsError && <p className="error-text">{logsError}</p>}
+                {logs === null && !logsError && <p className="empty-message">読み込み中…</p>}
+                {logs !== null && logs.length === 0 && (
+                  <p className="empty-message">実行ログはありません。</p>
+                )}
+                {logs !== null && logs.length > 0 && (
+                  <ol className="log-list">
+                    {logs.map((entry) => (
+                      <li key={entry.id} className={`log-entry log-${entry.level}`}>
+                        <time dateTime={new Date(entry.created_at * 1000).toISOString()}>
+                          {new Date(entry.created_at * 1000).toLocaleTimeString('ja-JP')}
+                        </time>
+                        <span>{entry.message}</span>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </section>
+            )}
           </section>
         )}
       </main>
 
       <footer className="site-footer">
-        <p>結果は一定時間後にサーバーから削除されます。</p>
+        <p>
+          判定結果・画像・実行ログはサーバーの SQLite に保存され、ブラウザを閉じても
+          過去の判定から開けます。不要になった履歴は削除できます。
+        </p>
       </footer>
     </div>
   )
