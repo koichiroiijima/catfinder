@@ -116,6 +116,8 @@ class AnalysisService:
         self,
         model: str | None = None,
         options: ChatOptions | None = None,
+        *,
+        supports_temperature: bool = True,
     ) -> AnalysisJob:
         job_id = uuid.uuid4().hex
         directory = self._root / job_id
@@ -126,6 +128,7 @@ class AnalysisService:
             created_at=time.time(),
             model=model,
             options=options if options is not None else ChatOptions(),
+            supports_temperature=supports_temperature,
         )
         await self._store.create_job(job)
         self._jobs[job_id] = job
@@ -234,6 +237,7 @@ class AnalysisService:
                     item.media_type,
                     model=job.model,
                     options=job.options,
+                    supports_temperature=job.supports_temperature,
                 )
             except asyncio.CancelledError:
                 raise

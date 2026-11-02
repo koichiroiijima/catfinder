@@ -87,9 +87,17 @@ export class ApiError extends Error {
   }
 }
 
+export interface ModelCapabilities {
+  supports_temperature: boolean
+  supports_reasoning_effort: boolean
+  supported_efforts: string[]
+}
+
 export interface ModelsResponse {
   models: string[]
   default: string
+  /** Missing for older servers; treat unknown models as configurable. */
+  capabilities?: Record<string, ModelCapabilities>
 }
 
 export async function fetchModels(signal?: AbortSignal): Promise<ModelsResponse> {

@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 import httpx
 
 from app.config import Settings
-from app.schemas import ModelsResponse
+from app.schemas import ModelCapabilities, ModelsResponse
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ SUCCESS_TTL_SECONDS = 600.0
 FAILURE_TTL_SECONDS = 60.0
 LIST_TIMEOUT_SECONDS = 10.0
 
-FetcherFn = Callable[[str, str, float], Awaitable[list[str]]]
+FetcherFn = Callable[[str, str, float], Awaitable[list[object]]]
 
 
 def _supports_vision(entry: dict[str, object]) -> bool:
@@ -82,8 +82,13 @@ def sort_model_ids(vision_entries: list[dict[str, object]]) -> list[str]:
     return [str(item.get("id")) for item in sorted(vision_entries, key=key)]
 
 
-async def fetch_vision_models(base_url: str, api_key: str, timeout: float) -> list[str]:
-    """List vision models that support structured output from ``/models``."""
+async def fetch_vision_models(base_url: str, api_key: str, timeout: float) -> list[object]:
+    """Fetch raw provider entries from ``/models``.
+
+    Filtering and capability extraction happen in :func:`select_models` so
+    custom fetchers can also return bare model IDs (treated as unknown
+    capabilities) without losing backward compatibility.
+    """
     headers = {}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -98,28 +103,79 @@ async def fetch_vision_models(base_url: str, api_key: str, timeout: float) -> li
         items = payload.get("data") or []
     if not isinstance(items, list):
         return []
-    return select_model_ids(items)
+    return items
 
 
-def select_model_ids(items: list[object]) -> list[str]:
-    """Keep deduplicated vision models that can honour a JSON schema."""
+def _string_parameters(entry: dict[str, object]) -> list[str] | None:
+    """Return normalized ``supported_parameters``, or None when unknown."""
+    parameters = entry.get("supported_parameters")
+    if not isinstance(parameters, list):
+        return None
+    return [str(item).lower() for item in parameters]
+
+
+def _supported_efforts(entry: dict[str, object]) -> list[str]:
+    reasoning = entry.get("reasoning")
+    if not isinstance(reasoning, dict):
+        return []
+    efforts = reasoning.get("supported_efforts")
+    if not isinstance(efforts, list):
+        return []
+    return [str(item) for item in efforts]
+
+
+def model_capabilities(entry: dict[str, object]) -> ModelCapabilities | None:
+    """Read sampling capabilities from provider metadata.
+
+    ``None`` means the provider did not expose parameter metadata. The caller
+    treats that as "unknown, therefore allow", matching the existing policy for
+    generic OpenAI-compatible servers.
+    """
+    parameters = _string_parameters(entry)
+    if parameters is None:
+        return None
+    return ModelCapabilities(
+        supports_temperature="temperature" in parameters,
+        supports_reasoning_effort="reasoning_effort" in parameters,
+        supported_efforts=_supported_efforts(entry),
+    )
+
+
+def select_models(
+    items: list[object],
+) -> tuple[list[str], dict[str, ModelCapabilities]]:
+    """Keep deduplicated vision models and their advertised capabilities."""
     usable: list[dict[str, object]] = []
     seen: set[str] = set()
     for item in items:
         if not isinstance(item, dict):
             continue
-        model_id = item.get("id")
+        entry = item
+
+        model_id = entry.get("id")
         if not isinstance(model_id, str) or not model_id.strip():
             continue
         if (
             model_id in seen
-            or not _supports_vision(item)
-            or not _supports_structured_output(item)
+            or not _supports_vision(entry)
+            or not _supports_structured_output(entry)
         ):
             continue
         seen.add(model_id)
-        usable.append(item)
-    return sort_model_ids(usable)
+        usable.append(entry)
+
+    capabilities: dict[str, ModelCapabilities] = {}
+    for entry in usable:
+        model_id = str(entry.get("id"))
+        detected = model_capabilities(entry)
+        if detected is not None:
+            capabilities[model_id] = detected
+    return sort_model_ids(usable), capabilities
+
+
+def select_model_ids(items: list[object]) -> list[str]:
+    """Keep deduplicated vision models that can honour a JSON schema."""
+    return select_models(items)[0]
 
 
 class ModelCatalog:
@@ -134,6 +190,7 @@ class ModelCatalog:
         self._settings = settings
         self._fetch = fetch or fetch_vision_models
         self._models: list[str] | None = None
+        self._capabilities: dict[str, ModelCapabilities] = {}
         self._expires = 0.0
         self._lock = asyncio.Lock()
 
@@ -167,24 +224,40 @@ class ModelCatalog:
                 )
 
             default = configured if configured in entries else (entries[0] if entries else "")
-            return ModelsResponse(models=entries, default=default)
+            return ModelsResponse(
+                models=entries,
+                default=default,
+                capabilities={
+                    model_id: self._capabilities[model_id]
+                    for model_id in entries
+                    if model_id in self._capabilities
+                },
+            )
 
     async def _refresh(self, now: float) -> None:
         base_url = self._settings.llm_base_url
         try:
             if self._settings.llm_configured and base_url:
-                models = await self._fetch(
+                entries = await self._fetch(
                     base_url,
                     self._settings.llm_api_key,
                     LIST_TIMEOUT_SECONDS,
                 )
             else:
-                models = []
+                entries = []
         except Exception:
-            models = []
+            entries = []
             self._expires = now + FAILURE_TTL_SECONDS
         else:
-            self._models = models
+            if not isinstance(entries, list):
+                entries = []
+            # Custom fetchers may return bare IDs. Normalize them into
+            # unknown-capability entries so the catalog still works without
+            # provider metadata.
+            normalized = [
+                {"id": item} if isinstance(item, str) else item for item in entries
+            ]
+            self._models, self._capabilities = select_models(normalized)
             self._expires = now + SUCCESS_TTL_SECONDS
 
     async def is_allowed(self, model: str) -> bool:

@@ -51,8 +51,11 @@ scripts/ui.sh start|stop|restart|status       # UI : 5173
   JSON パースへのフォールバックはない。
 - `app/models.py` は `GET /models` から vision かつ `structured_outputs` 対応の
   モデルだけを返す。`LLM_MODEL` が一覧に無い場合は一覧先頭を既定にする。
+  `supported_parameters` から temperature / reasoning_effort の対応状況も抽出し、
+  未知の接続先は「対応」として扱う。
 - API パラメータ (`reasoning_effort` / `temperature` / `max_tokens`) はジョブに保存し、
-  モデルと実効パラメータの組で `ChatOpenAI` をキャッシュする。
+  モデルと実効パラメータの組で `ChatOpenAI` をキャッシュする。temperature 非対応
+  モデルには送らず、明示指定は 400。UI は Temperature 入力を無効化する。
 - 使用量は `include_raw=True` の raw `usage_metadata` から取得する。API はジョブ合計のみ
   返し、UI は合計トークン数（取得できればコスト）を表示する。
 - 画像 1 枚の失敗は `error` として記録し、ジョブは継続。`completed` は成功を意味しない。

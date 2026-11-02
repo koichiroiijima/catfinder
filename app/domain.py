@@ -31,6 +31,9 @@ class AnalysisJob:
     finished_at: float | None = None
     model: str | None = None
     options: ChatOptions = field(default_factory=ChatOptions)
+    # Whether the selected provider advertises temperature for this model.
+    # Not persisted: recovered jobs are never re-run, so the default is safe.
+    supports_temperature: bool = True
     status: AnalysisStatus = AnalysisStatus.QUEUED
     images: list[JobImage] = field(default_factory=list)
     task: asyncio.Task[None] | None = None

@@ -194,6 +194,49 @@ describe('App', () => {
     expect(body?.get('max_tokens')).toBe('500')
   })
 
+  it('disables temperature for a model that does not support it', async () => {
+    const catalogWithCapabilities = {
+      models: ['vision-x', 'vision-y'],
+      default: 'vision-x',
+      capabilities: {
+        'vision-x': {
+          supports_temperature: true,
+          supports_reasoning_effort: true,
+          supported_efforts: ['high'],
+        },
+        'vision-y': {
+          supports_temperature: false,
+          supports_reasoning_effort: true,
+          supported_efforts: ['high'],
+        },
+      },
+    }
+    const fetchMock = vi.mocked(fetch)
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(catalogWithCapabilities))
+      .mockResolvedValueOnce(jsonResponse({ analyses: [] }))
+      .mockResolvedValueOnce(jsonResponse({ id: 'job-1', status: 'queued', total: 1 }, 202))
+      .mockResolvedValueOnce(jsonResponse(completed))
+
+    render(<App />)
+    fireEvent.change(screen.getByLabelText('Temperature'), { target: { value: '0.2' } })
+    fireEvent.change(await screen.findByLabelText('判定モデル'), {
+      target: { value: 'vision-y' },
+    })
+
+    expect(screen.getByLabelText('Temperature')).toBeDisabled()
+    expect(screen.getByLabelText('Temperature')).toHaveValue(null)
+    expect(
+      screen.getByText('このモデルは Temperature に対応していません。'),
+    ).toBeInTheDocument()
+
+    selectFiles('cat.png')
+    fireEvent.click(screen.getByRole('button', { name: '判定する' }))
+
+    await screen.findByText('茶色の猫が写っています。')
+    expect(postedForm(fetchMock, 2)?.has('temperature')).toBe(false)
+  })
+
   it('sends the model chosen in the select', async () => {
     const fetchMock = vi.mocked(fetch)
     fetchMock

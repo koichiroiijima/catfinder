@@ -192,10 +192,11 @@ async def create_analysis(
         raise HTTPException(status_code=400, detail="画像を1枚以上選択してください。")
     if model is not None:
         model = model.strip()
+    catalog_response = await catalog.list()
     if not model:
         # Blank or omitted means "use the catalog default", which follows the
         # configured model unless it is not structured-output capable.
-        model = (await catalog.list()).default
+        model = catalog_response.default
         if not model:
             raise HTTPException(
                 status_code=503,
@@ -204,7 +205,7 @@ async def create_analysis(
                     "LLM_MODEL を変更してください。"
                 ),
             )
-    elif not await catalog.is_allowed(model):
+    elif model not in catalog_response.models:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -212,6 +213,10 @@ async def create_analysis(
                 "Structured Output に対応した vision モデルを選択してください。"
             ),
         )
+    capabilities = catalog_response.capabilities.get(model)
+    supports_temperature = (
+        capabilities.supports_temperature if capabilities is not None else True
+    )
     if len(selected) > settings.max_files:
         raise HTTPException(
             status_code=400,
@@ -219,7 +224,16 @@ async def create_analysis(
         )
 
     options = _parse_chat_options(reasoning_effort, temperature, max_tokens)
-    job = await service.new_job(model, options)
+    if options.temperature is not None and not supports_temperature:
+        raise HTTPException(
+            status_code=400,
+            detail="このモデルは temperature に対応していません。",
+        )
+    job = await service.new_job(
+        model,
+        options,
+        supports_temperature=supports_temperature,
+    )
     try:
         for upload in selected:
             try:

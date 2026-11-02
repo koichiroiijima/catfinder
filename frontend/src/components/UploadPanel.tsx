@@ -10,6 +10,7 @@ interface UploadPanelProps {
   models: string[] | null
   model: string | null
   options: ChatOptionInput
+  temperatureSupported: boolean
   onModelChange: (model: string) => void
   onOptionsChange: (options: ChatOptionInput) => void
   onAdd: (files: File[]) => void
@@ -32,6 +33,7 @@ export function UploadPanel({
   models,
   model,
   options,
+  temperatureSupported,
   onModelChange,
   onOptionsChange,
   onAdd,
@@ -163,9 +165,12 @@ export function UploadPanel({
             min="0"
             max="2"
             step="0.1"
-            placeholder="0（既定）"
+            placeholder={temperatureSupported ? '0（既定）' : 'このモデルは非対応'}
             value={options.temperature}
-            disabled={disabled}
+            disabled={disabled || !temperatureSupported}
+            aria-describedby={
+              temperatureSupported ? undefined : 'temperature-unsupported'
+            }
             onChange={(event) =>
               onOptionsChange({ ...options, temperature: event.target.value })
             }
@@ -185,6 +190,11 @@ export function UploadPanel({
             }
           />
         </div>
+        {!temperatureSupported && (
+          <p className="options-hint" id="temperature-unsupported">
+            このモデルは Temperature に対応していません。
+          </p>
+        )}
         <p className="options-hint">
           モデルやプロバイダが対応していないパラメータを指定すると、判定がエラーになる場合があります。
         </p>

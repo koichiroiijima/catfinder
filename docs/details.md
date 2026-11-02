@@ -19,6 +19,9 @@
   セレクトボックスを非表示にし、既定モデルでの送信に任せる。接続先の `/models`
   取得に失敗した場合は、サーバーが既定モデル 1 件を返すため選択肢 1 件で表示される。
 - 一覧が空の場合もセレクトボックスを非表示にする。
+- 各モデルの `capabilities` を参照し、temperature 非対応モデルでは
+  「詳細設定」の Temperature 入力を無効化する。モデルを切り替えたとき、
+  非対応モデルなら入力済みの temperature はクリアされる。
 
 ### 詳細設定
 
@@ -28,11 +31,13 @@
 | 項目 | 入力 | 未指定時 |
 | --- | --- | --- |
 | 推論の強さ | 既定 / なし / 最小 / 低 / 中 / 高 | プロバイダ既定 |
-| Temperature | 0〜2 の数値 | 0 |
+| Temperature | 0〜2 の数値 | 0（モデルが対応している場合） |
 | 最大出力トークン | 1〜200000 の整数 | プロバイダ既定 |
 
-モデルやプロバイダが対応していないパラメータを指定すると、その画像の判定は
-エラーになる。エラー内容は結果カードに表示される。
+temperature 非対応のモデルでは Temperature 入力が無効になり、
+「このモデルは Temperature に対応していません。」と表示する。
+モデルやプロバイダが対応していないその他のパラメータを指定すると、その画像の
+判定はエラーになる。エラー内容は結果カードに表示される。
 
 ### 判定中
 
@@ -85,10 +90,11 @@
 | フィールド | 型 | 値 | 未指定時 |
 | --- | --- | --- | --- |
 | `reasoning_effort` | 文字列 | `none` / `minimal` / `low` / `medium` / `high` | プロバイダ既定 |
-| `temperature` | 文字列（数値） | 0〜2 | 0 |
+| `temperature` | 文字列（数値） | 0〜2 | 0（モデルが対応している場合） |
 | `max_tokens` | 文字列（整数） | 1〜200000 | プロバイダ既定 |
 
-空文字は未指定として扱う。
+temperature 非対応のモデルには temperature を送らない。明示的に指定した場合は
+`400` を返す。空文字は未指定として扱う。
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/analyses \
@@ -124,6 +130,7 @@ curl -X POST http://127.0.0.1:8000/api/analyses \
 | `400` | 推論の強さが不正 | 推論の強さは none / minimal / low / medium / high から選んでください。 |
 | `400` | temperature が数値でない | temperature は 0〜2 の数値で指定してください。 |
 | `400` | temperature が範囲外 | temperature は 0〜2 の範囲で指定してください。 |
+| `400` | temperature 非対応モデルへの指定 | このモデルは temperature に対応していません。 |
 | `400` | max_tokens が不正 | max_tokens は 1〜200000 の整数で指定してください。 |
 | `413` | サイズ超過 | 画像が大きすぎます（上限 15MB）。 |
 | `503` | `LLM_MODEL` 未設定 | LLM が設定されていません。LLM_MODEL を設定してください。 |
@@ -283,11 +290,31 @@ SQLite に保存された画像（BLOB）を返す。`Content-Type` は JPEG / P
 {
   "models": [
     "nvidia/nemotron-3.5-super-vl:free",
-    "other-vision-model:free"
+    "openai/gpt-6-luna"
   ],
-  "default": "nvidia/nemotron-3.5-super-vl:free"
+  "default": "nvidia/nemotron-3.5-super-vl:free",
+  "capabilities": {
+    "nvidia/nemotron-3.5-super-vl:free": {
+      "supports_temperature": true,
+      "supports_reasoning_effort": false,
+      "supported_efforts": []
+    },
+    "openai/gpt-6-luna": {
+      "supports_temperature": false,
+      "supports_reasoning_effort": true,
+      "supported_efforts": ["none", "low", "medium", "high", "xhigh", "max"]
+    }
+  }
 }
 ```
+
+- `capabilities` は `supported_parameters` / `reasoning.supported_efforts` から作る。
+  `supported_parameters` を返さない接続先ではそのモデルの項目を省略し、
+  呼び出し側は「未知＝対応」として扱う。
+- `supports_temperature` が `false` のモデルには temperature を送らない。
+  UI は Temperature 入力を無効化する。
+- `supported_efforts` はプロバイダが返した値をそのまま入れる。アプリが UI で
+  提示する値（`none` / `minimal` / `low` / `medium` / `high`）以外を含む場合がある。
 
 - 既定値（`LLM_MODEL`）が一覧に含まれる場合は先頭に置き、`default` にも入れる。
 - `LLM_MODEL` が一覧に無い場合は、一覧の先頭を `default` として返す
@@ -315,7 +342,8 @@ API キーなどの秘密情報は返さない。
 API キーが必要。モデルと接続先は `LLM_MODEL` / `LLM_BASE_URL` で差し替えられる。
 判定リクエストに `model` が指定された場合は、そのモデルを使う（未指定なら
 `GET /api/models` の既定値）。`reasoning_effort` / `temperature` / `max_tokens`
-はリクエストごとに上書きできる。モデルと実効パラメータの組ごとに
+はリクエストごとに上書きできる。temperature はモデルが対応している場合だけ
+送信し、未指定時は 0 にする。モデルと実効パラメータの組ごとに
 `ChatOpenAI` をアナライザー内にキャッシュする。
 
 出力は常に `json_schema` の Structured Output
@@ -380,7 +408,8 @@ uv run ruff check .
 - 対象: 正常系、部分失敗、入力検証、上限、404、削除、LLM 未設定、
   モデル指定（既定値・未登録モデルの 400・ジョブへのモデル記録）、
   既定モデルが一覧に無い場合の一覧先頭へのフォールバック・利用可能モデル 0 件の 503、
-  API パラメータ（転送・不正値の 400・ジョブへの記録）、使用量の集計と欠損時の `null`。
+  API パラメータ（転送・不正値の 400・ジョブへの記録）、使用量の集計と欠損時の `null`、
+  temperature 非対応モデルでの送信省略と明示指定時の 400。
 - 並列実行は `tests/test_api.py` の `ConcurrencyProbe` で、同時に走る判定が
   `llm_concurrency` を超えないことを検証する。
 - `tests/test_jobs.py` は `eta_seconds` の計算（完了 0 枚・全完了・開始時刻なしの
@@ -396,8 +425,9 @@ uv run ruff check .
   常に `json_schema` を使うこと、失敗時にフォールバックしないこと、
   OpenRouter 接続時の `require_parameters` 付与を検証する。
 - `tests/test_models.py` は vision + `structured_outputs` の絞り込み、既定モデルの
-  解決、fetch 関数を差し替えたモデル一覧の取得・キャッシュ・フォールバックを
-  検証する。実プロバイダへの接続は呼ばない。
+  解決、`supported_parameters` からの capability 抽出、fetch 関数を差し替えた
+  モデル一覧の取得・キャッシュ・フォールバックを検証する。実プロバイダへの接続は
+  呼ばない。
 - 実モデルの確認は明示的に有効化する:
 
   ```bash
@@ -419,6 +449,8 @@ npm run build
 
 - `fetch` をモックし、アップロード→ポーリング→結果表示を検証する。
 - 「詳細設定」の値が `FormData` に載ること、使用トークン数・コストが表示されることも検証する。
+- capability で temperature 非対応とされたモデルを選ぶと Temperature が無効になり、
+  入力済みの値がクリアされ、送信 `FormData` に載らないことも検証する。
 - 判定中の残り時間表示と、`options` を欠いたレスポンスでも結果が表示されることも検証する。
 - 501 枚を選択したときに 500 枚で打ち切られ、上限メッセージが出ることも検証する。
 - `URL.createObjectURL` は `src/test/setup.ts` でモックする。
@@ -439,6 +471,8 @@ npm run build
 | OpenRouter で 401 / 403 | `LLM_API_KEY` に有効な OpenRouter のキーが設定されているか確認 |
 | 構造化出力で失敗する | `LLM_MODEL` が `/api/models` に出る `structured_outputs` 対応モデルか確認する |
 | 詳細設定を指定すると全画像がエラー | モデル／プロバイダがそのパラメータに対応しているか確認。まず「既定」に戻す |
+| Temperature が入力できない | そのモデルが temperature 非対応。別のモデルを選ぶか、プロバイダ既定に任せる |
+| OpenRouter で 404「No endpoints found that can handle the requested parameters」 | モデルの `capabilities` と送信パラメータを確認。temperature 非対応モデルへ送っていないか |
 | 使用トークン数が表示されない | プロバイダが `usage` を返しているか確認。返さない場合は `null` になる |
 | コストが表示されない | OpenRouter 以外は `usage.cost` を返さないことが多い |
 | UI から API に届かない | `scripts/server.sh status` と Vite の proxy 設定を確認 |

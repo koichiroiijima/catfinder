@@ -6,10 +6,10 @@
 ## 現状
 
 - FastAPI + LangChain（`ChatOpenAI`）のバックエンドと、React + Vite の UI を実装済み。
-- バックエンド 64 テスト（モデル一覧・モデル指定・API パラメータ・使用量集計・
-  ETA・並列数制御・SQLite 永続化・履歴/ログ・再起動復元・シャットダウン時の
-  中断を含む）、
-  フロントエンド 13 テストが成功。実 LLM の結合テスト 1 件は既定でスキップ。
+- バックエンド 70 テスト（モデル一覧・モデル指定・capability・API パラメータ・
+  使用量集計・ETA・並列数制御・SQLite 永続化・履歴/ログ・再起動復元・
+  シャットダウン時の中断を含む）、
+  フロントエンド 14 テストが成功。実 LLM の結合テスト 1 件は既定でスキップ。
 - 判定リクエストは `LLM_CONCURRENCY`（既定 8、上限 32）で並列化済み。
   `asyncio.Semaphore` により同時 HTTP リクエスト数を制限する。
 - 画像は UI・API とも 1 リクエスト 500 枚まで（`MAX_FILES`、上限 500）。
@@ -23,7 +23,11 @@
   `POST /api/analyses` の `model` フィールドでジョブごとに使用モデルを
   切り替えられる。`LLM_MODEL` が一覧に無い場合は一覧の先頭が既定になる。
 - UI の「詳細設定」から `reasoning_effort` / `temperature` / `max_tokens` を
-  ジョブごとに指定できる。未指定時は temperature 0、それ以外はプロバイダ既定。
+  ジョブごとに指定できる。`GET /api/models` が `supported_parameters` から
+  `capabilities`（temperature / reasoning_effort の対応状況）を返し、
+  temperature 非対応モデルでは送信せず、UI の Temperature 入力も無効化する。
+  対応モデルの未指定時は従来どおり temperature 0。非対応モデルへ明示指定すると 400。
+  メタデータを返さない接続先は「未知＝対応」として従来どおり送信する。
 - 判定結果は常に `json_schema` の Structured Output で受け取り、
   `include_raw=True` で `usage_metadata` から使用トークンを取得する。
   JSON パースへのフォールバックはない。OpenRouter 接続時は
@@ -71,12 +75,22 @@ scripts/ui.sh status
   で確認できる。
 - 既定モデル `nvidia/nemotron-3.5-super-vl:free` が実際に `json_schema`
   構造化出力を受け付けるか（`/models` の `structured_outputs` は確認済み）。
-- OpenRouter の実 `/api/models` に対する `GET /api/models`（vision フィルタの
-  退屈なケース・フリーモデルの並び順）は未検証。モックでのみ確認済み。
+- OpenRouter の実 `/api/models` に対する `GET /api/models` は、取得した生データで
+  vision / `structured_outputs` の絞り込みと capability 抽出を確認済み。
+  実サーバー経由のレスポンス（フリーモデルの並び順・`capabilities` の欠落有無）は
+  未確認。
 - 選択した別モデルでの実判定。モデルごとの応答特性（confidence の単位や
   構造化出力対応）はモデル依存のため、実キーでの確認が必要。
 - 実モデルで `reasoning_effort` / `temperature` / `max_tokens` が受け付けられるか。
   モデルによっては 400 になり、画像単位のエラーになる。
+- temperature 非対応モデル（OpenRouter の `openai/gpt-6-luna` /
+  `anthropic/claude-fable-5` など）への実判定で、temperature を送らないことで
+  「No endpoints found that can handle the requested parameters」404 が解消されるか。
+  実 API キーでの確認が必要。
+- `supported_parameters` を返さない接続先で、引き続き temperature が送られて
+  判定できるか（未知＝対応のフォールバック）。
+- Qwen 系モデルが `CatVerdict` を 1 要素配列で返し、structured output の
+  バリデーションに失敗する事象。未修正（モデル側の応答形式に依存）。
 - OpenRouter の `usage`（トークン数・cost）が LangChain の
   `usage_metadata` / `response_metadata` に期待どおり載るか。
 - 非対応 endpoint にルーティングされた場合に、`json_schema` が画像単位の
@@ -101,8 +115,10 @@ scripts/ui.sh status
 3. SSE による進捗配信
 4. 履歴の検索・ページング UI、保持期間/容量の設定
 5. クライアント側での画像リサイズ
-6. 画像ごとの使用量表示、コスト上限、モデル別の対応パラメータ表示
+6. 画像ごとの使用量表示、コスト上限
 7. ETA の精度改善（画像サイズ・過去の実績を加味する）
+8. `supported_efforts` に合わせた reasoning_effort 選択肢の絞り込み
+9. Qwen 系の 1 要素配列応答の正規化（必要になった場合）
 
 ## 注意
 

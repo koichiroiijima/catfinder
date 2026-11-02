@@ -98,7 +98,7 @@ pending ──> running ──> cat
 | --- | --- |
 | `app/main.py` | `create_app()`、ルーティング、リクエスト検証（API パラメータ含む）、レスポンス変換 |
 | `app/config.py` | `pydantic-settings` による環境変数読み込み |
-| `app/models.py` | 接続先 `/models` からの vision + Structured Output 対応モデル一覧取得、キャッシュ、許可判定 |
+| `app/models.py` | 接続先 `/models` からの vision + Structured Output 対応モデル一覧取得、パラメータ対応状況の抽出、キャッシュ、許可判定 |
 | `app/images.py` | 実データ検証、表示用ファイル名の無害化、作業ディレクトリへの保存 |
 | `app/analyzer.py` | LangChain メッセージ構築、`json_schema` 構造化出力、モデル・パラメータ別クライアントのキャッシュ、usage 抽出 |
 | `app/jobs.py` | ジョブ登録、並列実行、集計（usage・残り時間含む）、実行ログ、削除 |
@@ -118,17 +118,24 @@ pending ──> running ──> cat
 ## LLM 連携
 
 ```python
-ChatOpenAI(
+kwargs = dict(
     model=model,
     base_url=settings.llm_base_url,
     api_key=settings.llm_api_key,
     timeout=settings.llm_timeout_seconds,
     max_retries=settings.llm_max_retries,
-    temperature=options.temperature if options.temperature is not None else 0,
     reasoning_effort=options.reasoning_effort,  # 指定時のみ
     max_tokens=options.max_tokens,              # 指定時のみ
 )
+if supports_temperature:
+    kwargs["temperature"] = options.temperature if options.temperature is not None else 0.0
+ChatOpenAI(**kwargs)
 ```
+
+- temperature は `GET /api/models` の `capabilities` を見て、対応モデルにだけ送る。
+  非対応モデルへ送ると OpenRouter の `require_parameters` と組み合わさって
+  「要求パラメータを満たす endpoint が無い」404 になるため。
+  未対応モデルでは `temperature` を kwargs に含めず、プロバイダ既定に任せる。
 
 - 既定値は OpenRouter（`https://openrouter.ai/api/v1`）の
   `nvidia/nemotron-3.5-super-vl:free`。`LLM_API_KEY` に OpenRouter のキーが必要。
@@ -139,8 +146,13 @@ ChatOpenAI(
   `LLM_MODEL` が Structured Output 対応モデルの一覧に無い場合は、一覧の先頭を
   既定値として使う。
 - UI の「詳細設定」で `reasoning_effort` / `temperature` / `max_tokens` を
-  リクエストごとに指定できる。未指定時は temperature 0、それ以外は
-  プロバイダ既定を使う。
+  リクエストごとに指定できる。temperature はモデルが対応している場合のみ
+  未指定時に 0 を使い、非対応モデルでは送らない。それ以外はプロバイダ既定を使う。
+- `GET /api/models` はモデル ID に加えて `capabilities`
+  （`supports_temperature` / `supports_reasoning_effort` / `supported_efforts`）を返す。
+  `supported_parameters` を返さない接続先では capability を省略し、未知として
+  従来どおりパラメータを送る。UI は `supports_temperature: false` のモデルで
+  Temperature 入力を無効化し、入力済みの値をクリアする。
 - `ChatOpenAI` はモデルと実効パラメータ（推論の強さ・temperature・max_tokens）
   の組ごとに 1 個生成し、`MultiModelCatAnalyzer` がプロセス内にキャッシュする。
   判定構造（プロンプト・構造化出力）はモデル間で共有する。
@@ -207,6 +219,9 @@ ChatOpenAI(
 - API パラメータは `ChatOptionInput`（空文字 = 未指定）で保持し、送信時だけ
   `reasoning_effort` / `temperature` / `max_tokens` を `FormData` に追加する。
   「詳細設定」は折りたたみで、既定は閉じた状態にする。
+- モデル選択時に `capabilities` を参照し、`supports_temperature: false` の
+  モデルでは Temperature 入力を無効化する。入力済みの値はモデル変更時にクリアし、
+  非対応モデルへ temperature を送らない。
 - 結果画面はジョブが実際に使ったパラメータと、合計トークン数（取得できた場合は
   コスト）を表示する。画像ごとの使用量は API では返さず、ジョブ合計のみ扱う。
 - 判定中はサーバーが返す `eta_seconds` を「残り時間: 約 X 分（概算）」として

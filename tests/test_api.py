@@ -34,6 +34,22 @@ def _empty_catalog(settings) -> ModelCatalog:
     return ModelCatalog(settings, fetch=fetch)
 
 
+def _catalog_with_capabilities(settings) -> ModelCatalog:
+    async def fetch(base_url: str, api_key: str, timeout: float) -> list[object]:
+        return [
+            {
+                "id": settings.llm_model,
+                "supported_parameters": ["temperature", "structured_outputs"],
+            },
+            {
+                "id": "no-temp-model",
+                "supported_parameters": ["structured_outputs", "reasoning_effort"],
+            },
+        ]
+
+    return ModelCatalog(settings, fetch=fetch)
+
+
 def _upload(name: str, data: bytes, media_type: str = "image/png"):
     return ("files", (name, data, media_type))
 
@@ -56,7 +72,15 @@ class ConcurrencyProbe:
         self.active = 0
         self.max_active = 0
 
-    async def analyze(self, path, media_type, *, model=None, options=None):
+    async def analyze(
+        self,
+        path,
+        media_type,
+        *,
+        model=None,
+        options=None,
+        supports_temperature: bool = True,
+    ):
         self.active += 1
         self.max_active = max(self.max_active, self.active)
         try:
@@ -223,6 +247,52 @@ def test_list_models_reports_provider_catalog(settings):
             "other-model",
             "third-model",
         ]
+
+
+def test_list_models_reports_sampling_capabilities(settings):
+    with client_for(
+        settings, FakeAnalyzer(), catalog=_catalog_with_capabilities(settings)
+    ) as client:
+        payload = client.get("/api/models").json()
+
+        assert payload["capabilities"][settings.llm_model]["supports_temperature"] is True
+        assert payload["capabilities"]["no-temp-model"]["supports_temperature"] is False
+
+
+def test_temperature_less_model_runs_without_sending_temperature(settings):
+    data = make_image()
+    analyzer = FakeAnalyzer(
+        verdicts={data: CatVerdict(has_cat=True, confidence=0.9, reason="猫。")}
+    )
+    with client_for(
+        settings, analyzer, catalog=_catalog_with_capabilities(settings)
+    ) as client:
+        response = client.post(
+            "/api/analyses",
+            data={"model": "no-temp-model"},
+            files=[_upload("cat.png", data)],
+        )
+        assert response.status_code == 202
+
+        payload = wait_for_completion(client, response.json()["id"])
+        assert payload["model"] == "no-temp-model"
+        assert payload["options"]["temperature"] is None
+        assert analyzer.supports_temperature == [False]
+
+
+def test_temperature_less_model_rejects_explicit_temperature(settings):
+    data = make_image()
+    with client_for(
+        settings, FakeAnalyzer(), catalog=_catalog_with_capabilities(settings)
+    ) as client:
+        response = client.post(
+            "/api/analyses",
+            data={"model": "no-temp-model", "temperature": "0.2"},
+            files=[_upload("cat.png", data)],
+        )
+
+        assert response.status_code == 400
+        assert "temperature" in response.json()["detail"]
 
 
 def test_post_with_model_uses_requested_model(settings):

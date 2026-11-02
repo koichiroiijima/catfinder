@@ -136,11 +136,25 @@ class AnalysisLogs(BaseModel):
     logs: list[LogEntry]
 
 
+class ModelCapabilities(BaseModel):
+    """Sampling controls advertised by the provider for one model.
+
+    Entries are omitted when the provider does not expose parameter metadata.
+    Callers should treat an unknown model as supporting temperature so that
+    generic OpenAI-compatible servers keep working.
+    """
+
+    supports_temperature: bool = True
+    supports_reasoning_effort: bool = False
+    supported_efforts: list[str] = Field(default_factory=list)
+
+
 class ModelsResponse(BaseModel):
     """Vision models offered by the configured OpenAI-compatible provider."""
 
     models: list[str]
     default: str
+    capabilities: dict[str, ModelCapabilities] = Field(default_factory=dict)
 
 
 class HealthResponse(BaseModel):

@@ -5,6 +5,7 @@ from app.models import (
     _supports_structured_output,
     _supports_vision,
     select_model_ids,
+    select_models,
     sort_model_ids,
 )
 from app.schemas import ModelsResponse
@@ -165,3 +166,51 @@ def test_select_model_ids_requires_vision_and_structured_output():
     ]
 
     assert select_model_ids(items) == ["unknown-shape", "vision-structured"]
+
+
+def test_select_models_extracts_sampling_capabilities():
+    items = [
+        {
+            "id": "temp-model",
+            "supported_parameters": ["temperature", "structured_outputs"],
+            "reasoning": {"supported_efforts": ["low", "high"]},
+        },
+        {
+            "id": "no-temp-model",
+            "supported_parameters": ["structured_outputs", "reasoning_effort"],
+            "reasoning": {"supported_efforts": ["minimal", "low"]},
+        },
+        {"id": "unknown-model"},
+    ]
+
+    ids, capabilities = select_models(items)
+
+    assert ids == ["no-temp-model", "temp-model", "unknown-model"]
+    assert capabilities["temp-model"].supports_temperature is True
+    assert capabilities["no-temp-model"].supports_temperature is False
+    assert capabilities["no-temp-model"].supports_reasoning_effort is True
+    assert capabilities["no-temp-model"].supported_efforts == ["minimal", "low"]
+    # Providers that do not expose parameter metadata stay unknown, so the
+    # caller keeps sending parameters instead of hiding the model.
+    assert "unknown-model" not in capabilities
+
+
+async def test_catalog_reports_model_capabilities(settings):
+    async def fetch(base_url: str, api_key: str, timeout: float) -> list[object]:
+        return [
+            {
+                "id": settings.llm_model,
+                "supported_parameters": ["temperature", "structured_outputs"],
+            },
+            {
+                "id": "no-temp-model",
+                "supported_parameters": ["structured_outputs"],
+            },
+        ]
+
+    catalog = ModelCatalog(settings, fetch=fetch)
+    response = await catalog.list()
+
+    assert response.models == [settings.llm_model, "no-temp-model"]
+    assert response.capabilities[settings.llm_model].supports_temperature is True
+    assert response.capabilities["no-temp-model"].supports_temperature is False

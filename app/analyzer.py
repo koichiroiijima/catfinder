@@ -44,6 +44,7 @@ class CatAnalyzer(Protocol):
         *,
         model: str | None = None,
         options: ChatOptions | None = None,
+        supports_temperature: bool = True,
     ) -> AnalysisOutcome: ...
 
 
@@ -163,7 +164,7 @@ class MultiModelCatAnalyzer:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._analyzers: dict[
-            tuple[str, str | None, float, int | None], LangChainCatAnalyzer
+            tuple[str, str | None, float | None, int | None], LangChainCatAnalyzer
         ] = {}
 
     async def analyze(
@@ -173,18 +174,31 @@ class MultiModelCatAnalyzer:
         *,
         model: str | None = None,
         options: ChatOptions | None = None,
+        supports_temperature: bool = True,
     ) -> AnalysisOutcome:
         name = model if model is not None else self._settings.llm_model
-        analyzer = self._analyzer_for(name, options)
+        analyzer = self._analyzer_for(
+            name,
+            options,
+            supports_temperature=supports_temperature,
+        )
         return await analyzer.analyze(path, media_type)
 
     def _analyzer_for(
         self,
         model: str,
         options: ChatOptions | None = None,
+        *,
+        supports_temperature: bool = True,
     ) -> LangChainCatAnalyzer:
         resolved = options if options is not None else ChatOptions()
-        temperature = resolved.temperature if resolved.temperature is not None else 0.0
+        # Keep the historical temperature=0 default only for models that
+        # advertise temperature. Sending it to the others makes OpenRouter
+        # fail with "no endpoints found that can handle the requested
+        # parameters" when provider.require_parameters is enabled.
+        temperature: float | None = None
+        if supports_temperature:
+            temperature = resolved.temperature if resolved.temperature is not None else 0.0
         effort = str(resolved.reasoning_effort) if resolved.reasoning_effort is not None else None
         key = (model, effort, temperature, resolved.max_tokens)
         existing = self._analyzers.get(key)
@@ -196,8 +210,9 @@ class MultiModelCatAnalyzer:
             "api_key": self._settings.llm_api_key,
             "timeout": self._settings.llm_timeout_seconds,
             "max_retries": self._settings.llm_max_retries,
-            "temperature": temperature,
         }
+        if temperature is not None:
+            kwargs["temperature"] = temperature
         if effort is not None:
             kwargs["reasoning_effort"] = effort
         if resolved.max_tokens is not None:

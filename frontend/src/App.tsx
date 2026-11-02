@@ -9,6 +9,7 @@ import {
   type ChatOptionInput,
   type ChatOptions,
   type LogEntry,
+  type ModelCapabilities,
 } from './api'
 import { HistoryList } from './components/HistoryList'
 import { ResultGrid } from './components/ResultGrid'
@@ -89,6 +90,9 @@ export default function App() {
   const [clientError, setClientError] = useState<string | null>(null)
   const [models, setModels] = useState<string[] | null>(null)
   const [model, setModel] = useState<string | null>(null)
+  const [capabilities, setCapabilities] = useState<
+    Record<string, ModelCapabilities>
+  >({})
   const [chatOptions, setChatOptions] = useState<ChatOptionInput>({
     reasoning_effort: '',
     temperature: '',
@@ -107,6 +111,7 @@ export default function App() {
     fetchModels(controller.signal)
       .then((catalog) => {
         setModels(catalog.models)
+        setCapabilities(catalog.capabilities ?? {})
         setModel((current) => current ?? catalog.default)
       })
       .catch(() => {
@@ -149,6 +154,9 @@ export default function App() {
 
   const running =
     starting || (jobId !== null && (summary === null || summary.status !== 'completed'))
+
+  const temperatureSupported =
+    model === null ? true : capabilities[model]?.supports_temperature ?? true
 
   const filteredImages = useMemo(() => {
     if (summary === null) {
@@ -209,6 +217,15 @@ export default function App() {
       URL.revokeObjectURL(target.preview)
     }
     setSelected((current) => current.filter((_, position) => position !== index))
+  }
+
+  const handleModelChange = (nextModel: string) => {
+    setModel(nextModel)
+    if (capabilities[nextModel]?.supports_temperature === false) {
+      setChatOptions((current) =>
+        current.temperature === '' ? current : { ...current, temperature: '' },
+      )
+    }
   }
 
   const handleStart = async () => {
@@ -313,7 +330,8 @@ export default function App() {
               models={models}
               model={model}
               options={chatOptions}
-              onModelChange={setModel}
+              temperatureSupported={temperatureSupported}
+              onModelChange={handleModelChange}
               onOptionsChange={setChatOptions}
               onAdd={addFiles}
               onRemove={removeFile}

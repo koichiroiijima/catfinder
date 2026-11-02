@@ -124,6 +124,21 @@ def test_multi_model_analyzer_caches_one_chat_model_per_name_and_options():
     assert first._model.temperature == 0.0
 
 
+def test_multi_model_analyzer_omits_temperature_when_unsupported():
+    analyzer = MultiModelCatAnalyzer(Settings(_env_file=None))
+
+    supported = analyzer._analyzer_for("model-a", ChatOptions())
+    unsupported = analyzer._analyzer_for(
+        "model-a",
+        ChatOptions(),
+        supports_temperature=False,
+    )
+
+    assert supported is not unsupported
+    assert supported._model.temperature == 0.0
+    assert unsupported._model.temperature is None
+
+
 def test_openrouter_clients_require_capable_endpoints():
     settings = Settings(_env_file=None)
     analyzer = MultiModelCatAnalyzer(settings)

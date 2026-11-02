@@ -43,6 +43,7 @@ class FakeAnalyzer:
         self.calls: list[bytes] = []
         self.models: list[str | None] = []
         self.options: list[ChatOptions | None] = []
+        self.supports_temperature: list[bool] = []
 
     async def analyze(
         self,
@@ -51,12 +52,14 @@ class FakeAnalyzer:
         *,
         model: str | None = None,
         options: ChatOptions | None = None,
+        supports_temperature: bool = True,
     ) -> AnalysisOutcome:
         await asyncio.sleep(0.01)
         data = path.read_bytes()
         self.calls.append(data)
         self.models.append(model)
         self.options.append(options)
+        self.supports_temperature.append(supports_temperature)
         if data in self.failures:
             raise RuntimeError("model exploded")
         return AnalysisOutcome(
