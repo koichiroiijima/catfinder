@@ -26,9 +26,9 @@ class Settings(BaseSettings):
 
     max_files: int = Field(default=500, ge=1, le=500)
     max_file_mb: int = Field(default=15, ge=1, le=100)
-    analysis_ttl_minutes: int = Field(default=60, ge=1)
 
     upload_dir: Path | None = None
+    database_path: Path = Path("data/catfinder.db")
 
     @property
     def llm_configured(self) -> bool:
@@ -37,7 +37,3 @@ class Settings(BaseSettings):
     @property
     def max_file_bytes(self) -> int:
         return self.max_file_mb * 1024 * 1024
-
-    @property
-    def analysis_ttl_seconds(self) -> float:
-        return self.analysis_ttl_minutes * 60

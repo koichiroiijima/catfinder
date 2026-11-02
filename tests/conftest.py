@@ -73,8 +73,8 @@ def settings(tmp_path) -> Settings:
         llm_concurrency=2,
         max_files=3,
         max_file_mb=2,
-        analysis_ttl_minutes=60,
         upload_dir=tmp_path / "uploads",
+        database_path=tmp_path / "catfinder.db",
     )
 
 
@@ -84,6 +84,11 @@ def client_for(
     analyzer,
     catalog: ModelCatalog | None = None,
 ) -> Iterator[TestClient]:
+    if catalog is None:
+        async def fetch(base_url: str, api_key: str, timeout: float) -> list[str]:
+            return [settings.llm_model]
+
+        catalog = ModelCatalog(settings, fetch=fetch)
     with TestClient(create_app(settings, analyzer, catalog)) as client:
         yield client
 

@@ -410,6 +410,69 @@ def test_summary_aggregates_token_usage(settings):
         assert usage["cost"] == pytest.approx(0.0015)
 
 
+def test_history_and_execution_logs_are_persisted(settings):
+    data = make_image()
+    analyzer = FakeAnalyzer(
+        verdicts={data: CatVerdict(has_cat=True, confidence=0.9, reason="猫。")}
+    )
+    with client_for(settings, analyzer) as client:
+        created = client.post("/api/analyses", files=[_upload("cat.png", data)]).json()
+        wait_for_completion(client, created["id"])
+
+        history = client.get("/api/analyses").json()["analyses"]
+        assert history[0]["id"] == created["id"]
+        assert history[0]["total"] == 1
+        assert history[0]["cat_count"] == 1
+        assert history[0]["model"] == settings.llm_model
+        assert history[0]["created_at"] > 0
+
+        logs = client.get(f"/api/analyses/{created['id']}/logs").json()
+        assert logs["id"] == created["id"]
+        messages = [entry["message"] for entry in logs["logs"]]
+        assert any("判定を開始" in message for message in messages)
+        assert any("cat.png: 猫あり" in message for message in messages)
+        assert any("判定が完了" in message for message in messages)
+
+
+def test_results_and_images_survive_an_app_restart(settings):
+    data = make_image()
+    analyzer = FakeAnalyzer(
+        verdicts={data: CatVerdict(has_cat=True, confidence=0.9, reason="猫。")}
+    )
+    with client_for(settings, analyzer) as client:
+        created = client.post("/api/analyses", files=[_upload("cat.png", data)]).json()
+        payload = wait_for_completion(client, created["id"])
+        image_url = payload["images"][0]["url"]
+
+    with client_for(settings, FakeAnalyzer()) as client:
+        payload = client.get(f"/api/analyses/{created['id']}").json()
+        assert payload["status"] == "completed"
+        assert payload["cat_count"] == 1
+        assert payload["images"][0]["filename"] == "cat.png"
+
+        image_response = client.get(image_url)
+        assert image_response.status_code == 200
+        assert image_response.content == data
+
+        history = client.get("/api/analyses").json()["analyses"]
+        assert history[0]["id"] == created["id"]
+
+        assert client.get(f"/api/analyses/{created['id']}/logs").status_code == 200
+
+
+def test_delete_removes_job_from_history(settings):
+    data = make_image()
+    analyzer = FakeAnalyzer(
+        verdicts={data: CatVerdict(has_cat=True, confidence=0.9, reason="猫。")}
+    )
+    with client_for(settings, analyzer) as client:
+        created = client.post("/api/analyses", files=[_upload("cat.png", data)]).json()
+        wait_for_completion(client, created["id"])
+
+        assert client.delete(f"/api/analyses/{created['id']}").status_code == 204
+        assert client.get("/api/analyses").json()["analyses"] == []
+
+
 def test_unknown_job_returns_404(settings):
     with client_for(settings, FakeAnalyzer()) as client:
         assert client.get("/api/analyses/missing").status_code == 404
