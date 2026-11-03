@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# Keep the SQLite database, WAL sidecars, logs and PID files owner-only.
+umask 077
+
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-8000}"
 PID_FILE="${PID_FILE:-$ROOT_DIR/.server.pid}"

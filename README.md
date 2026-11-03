@@ -210,7 +210,7 @@ app/
   main.py       FastAPI の組み立てとルーティング
   config.py     環境変数
   models.py     判定モデル一覧の取得とキャッシュ
-  analyzer.py   LangChain による画像判定（モデル・パラメータごとにクライアントをキャッシュ）
+  analyzer.py   LangChain による画像判定（モデル・パラメータごとにクライアントを LRU でキャッシュ、上限 32 件）
   jobs.py       ジョブ管理・並列実行・実行ログ記録
   storage.py    SQLite へのジョブ・結果・画像・ログの永続化
   domain.py     ジョブと画像の内部データ構造
@@ -233,6 +233,10 @@ scripts/                開発用の起動・停止スクリプト
 - 認証はありません。信頼できるローカル環境での利用を想定しています。
 - 判定結果・画像・実行ログは `DATABASE_PATH` の SQLite に保存されます。
   API を再起動しても履歴から同じ結果を開けます。
+- SQLite の DB 本体と WAL / SHM / journal は所有者のみ読み書きできる
+  `0600`、新しく作る保存先ディレクトリは `0700` で作成されます。
+  `scripts/server.sh` は `umask 077` で起動するため、新規のログや PID ファイルも
+  所有者だけが読めます。
 - 画像は判定中だけ `UPLOAD_DIR`（未指定時は OS の一時ディレクトリ）に書き出され、
   ジョブ完了後に削除されます。表示は SQLite の BLOB から行います。
 - 履歴は自動削除されないため、DB のサイズは `DATABASE_PATH` のファイルで

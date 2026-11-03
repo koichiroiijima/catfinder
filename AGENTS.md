@@ -27,10 +27,13 @@ scripts/ui.sh start|stop|restart|status       # UI : 5173
 
 ## 環境
 
-- `.env` はコミットしない。テンプレートは `.env.example`。
+- `.env` はコミットしない。`.gitignore` は `.env*` を無視し、
+  `.env.example` だけを追跡する。テンプレートは `.env.example`。
 - `LLM_MODEL` 未設定でも起動できる。判定 API は 503、`GET /api/health` で設定有無を確認。
 - `.env` は pydantic-settings がカレントディレクトリから読む。サーバーはリポジトリルートで起動する。
 - `DATABASE_PATH`（既定 `./data/catfinder.db`）に履歴・画像・実行ログが残る。
+  DB 本体と WAL / SHM / journal は `0600`、新規作成する保存先ディレクトリは
+  `0700`。`scripts/server.sh` は `umask 077` で起動する。
   テストは `tmp_path` の DB を使うため、ローカルの履歴を汚さない。
 
 ## 構造の要点
@@ -54,8 +57,12 @@ scripts/ui.sh start|stop|restart|status       # UI : 5173
   `supported_parameters` から temperature / reasoning_effort の対応状況も抽出し、
   未知の接続先は「対応」として扱う。
 - API パラメータ (`reasoning_effort` / `temperature` / `max_tokens`) はジョブに保存し、
-  モデルと実効パラメータの組で `ChatOpenAI` をキャッシュする。temperature 非対応
+  モデルと実効パラメータの組で `ChatOpenAI` をキャッシュする。キャッシュは LRU で
+  上限 `MAX_CACHED_ANALYZERS = 32` 件。あふれたクライアントは使用中リクエストが
+  終わってから `aclose()` し、シャットダウン時にも解放する。temperature 非対応
   モデルには送らず、明示指定は 400。UI は Temperature 入力を無効化する。
+  各 `ChatOpenAI` には専用の `httpx.Client` / `httpx.AsyncClient` を渡し、
+  langchain-openai の共有 HTTP クライアントを閉じない。
 - 使用量は `include_raw=True` の raw `usage_metadata` から取得する。API はジョブ合計のみ
   返し、UI は合計トークン数（取得できればコスト）を表示する。
 - 画像 1 枚の失敗は `error` として記録し、ジョブは継続。`completed` は成功を意味しない。
@@ -100,7 +107,10 @@ scripts/ui.sh start|stop|restart|status       # UI : 5173
 - 新しい環境変数は `.env.example`、`README.md`、`docs/design.md`、`docs/details.md` に追加する。
 - 実装を変えたら `README.md` / `docs/design.md` / `docs/details.md` / `handover.md` を追従させる。
 - 生成物をコミットしない: `.venv/`, `frontend/node_modules/`, `frontend/dist/`,
-  `.pytest_cache/`, `.ruff_cache/`, `.env`, `*.pid`, `*.log`, `data/`（SQLite DB）, 一時画像。
+  `.pytest_cache/`, `.ruff_cache/`, `.env*`（`.env.example` を除く）, `*.pid`, `*.log`,
+  `*.db`, `*.db-*`, `*.sqlite*`, `data/`（SQLite DB）, 一時画像。
+- DB の権限 (`0600` / 新規ディレクトリ `0700`)、`scripts/server.sh` の
+  `umask 077`、アナライザーの LRU 上限と `aclose()` の解放経路を壊さない。
 - DB スキーマを変えるときは `app/storage.py` に後方互換の `CREATE TABLE IF NOT EXISTS` /
   列追加を入れ、既存 `data/catfinder.db` を壊さない。
 

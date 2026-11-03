@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 import sqlite3
 import time
 from collections.abc import Iterator
@@ -16,6 +18,38 @@ from app.schemas import (
     LogEntry,
     TokenUsage,
 )
+
+logger = logging.getLogger(__name__)
+
+DATABASE_FILE_MODE = 0o600
+DATABASE_DIRECTORY_MODE = 0o700
+
+
+def _restrict_database_files(path: Path) -> None:
+    """Keep the SQLite database and its sidecar files private."""
+    if os.name != "posix":
+        return
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        target = path.with_name(f"{path.name}{suffix}")
+        try:
+            target.chmod(DATABASE_FILE_MODE)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            logger.warning("Could not restrict permissions on %s", target)
+
+
+def _prepare_database_directory(path: Path) -> None:
+    """Create the database directory with owner-only access when possible."""
+    parent = path.parent
+    created = not parent.exists()
+    parent.mkdir(parents=True, exist_ok=True, mode=DATABASE_DIRECTORY_MODE)
+    if created and os.name == "posix":
+        try:
+            parent.chmod(DATABASE_DIRECTORY_MODE)
+        except OSError:
+            logger.warning("Could not restrict permissions on %s", parent)
+
 
 SCHEMA = """
 PRAGMA journal_mode = WAL;
@@ -81,7 +115,10 @@ class AnalysisStore:
     def __init__(self, path: Path) -> None:
         self._path = path
         self._lock = asyncio.Lock()
-        self._path.parent.mkdir(parents=True, exist_ok=True)
+        _prepare_database_directory(self._path)
+        if not self._path.exists():
+            self._path.touch(mode=DATABASE_FILE_MODE)
+        _restrict_database_files(self._path)
         self._init_schema()
 
     @contextmanager
@@ -94,6 +131,7 @@ class AnalysisStore:
             connection.commit()
         finally:
             connection.close()
+            _restrict_database_files(self._path)
 
     def _init_schema(self) -> None:
         with self._connection() as connection:

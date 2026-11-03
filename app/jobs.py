@@ -329,5 +329,11 @@ class AnalysisService:
             shutil.rmtree(job.directory, ignore_errors=True)
         self._jobs.clear()
         await self._store.recover_interrupted()
+        close_analyzer = getattr(self._analyzer, "aclose", None)
+        if close_analyzer is not None:
+            try:
+                await close_analyzer()
+            except Exception:
+                logger.exception("Failed to close the analyzer")
         if self._owns_root:
             shutil.rmtree(self._root, ignore_errors=True)

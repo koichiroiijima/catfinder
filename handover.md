@@ -6,9 +6,9 @@
 ## 現状
 
 - FastAPI + LangChain（`ChatOpenAI`）のバックエンドと、React + Vite の UI を実装済み。
-- バックエンド 70 テスト（モデル一覧・モデル指定・capability・API パラメータ・
+- バックエンド 76 テスト（モデル一覧・モデル指定・capability・API パラメータ・
   使用量集計・ETA・並列数制御・SQLite 永続化・履歴/ログ・再起動復元・
-  シャットダウン時の中断を含む）、
+  シャットダウン時の中断・クライアントキャッシュの上限/解放・DB 権限を含む）、
   フロントエンド 14 テストが成功。実 LLM の結合テスト 1 件は既定でスキップ。
 - 判定リクエストは `LLM_CONCURRENCY`（既定 8、上限 32）で並列化済み。
   `asyncio.Semaphore` により同時 HTTP リクエスト数を制限する。
@@ -36,6 +36,17 @@
 - ジョブ・判定結果・画像 (BLOB)・実行ログを SQLite (`DATABASE_PATH`、既定
   `./data/catfinder.db`) に保存する。UI の「過去の判定」からブラウザを閉じた後や
   API 再起動後でも結果を開ける。履歴の自動削除はなく、× で明示的に削除する。
+- LLM クライアントのキャッシュは LRU で上限 32 件
+  (`MAX_CACHED_ANALYZERS`)。あふれたクライアントは使用中リクエストの完了後に
+  `aclose()` する。各 `ChatOpenAI` には専用の `httpx.Client` /
+  `httpx.AsyncClient` を渡し、langchain-openai のプロセス共有クライアントを
+  閉じない。シャットダウン時は未使用クライアントを解放する。
+- SQLite は DB 本体と WAL / SHM / journal を `0600`、新規作成する保存先
+  ディレクトリを `0700` にする。`scripts/server.sh` は `umask 077` で起動する。
+  `.gitignore` は `.env*`（`.env.example` を除く）と
+  `*.db` / `*.db-*` / `*.sqlite*` を無視する。
+- この作業環境では `.env` と `data/catfinder.db` を `600`、`data/` を `700`、
+  既存の `.server.log` / `.ui.log` を `600` に設定済み。
 - `GET /api/analyses`（履歴、`limit`/`offset`）と
   `GET /api/analyses/{id}/logs`（実行ログ）を追加済み。UI は「実行ログを表示」で
   ログを確認できる。

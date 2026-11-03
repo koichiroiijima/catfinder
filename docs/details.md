@@ -344,7 +344,12 @@ API キーが必要。モデルと接続先は `LLM_MODEL` / `LLM_BASE_URL` で�
 `GET /api/models` の既定値）。`reasoning_effort` / `temperature` / `max_tokens`
 はリクエストごとに上書きできる。temperature はモデルが対応している場合だけ
 送信し、未指定時は 0 にする。モデルと実効パラメータの組ごとに
-`ChatOpenAI` をアナライザー内にキャッシュする。
+`ChatOpenAI` をアナライザー内にキャッシュする。キャッシュは LRU で上限
+`MAX_CACHED_ANALYZERS = 32` 件。あふれたクライアントは、そのクライアントを
+使っているリクエストが終わってから閉じる。各 `ChatOpenAI` には専用の
+`httpx.Client` / `httpx.AsyncClient` を渡し、langchain-openai がプロセス内で
+共有する既定クライアントを閉じないようにする。アプリ終了時はキャッシュを
+空にし、未使用クライアントを解放する（使用中のものはリクエスト完了時に解放）。
 
 出力は常に `json_schema` の Structured Output
 （`with_structured_output(CatVerdict, method="json_schema", include_raw=True)`）
@@ -388,8 +393,10 @@ Structured Output に失敗した画像は、その画像だけ `error` にな�
 | LLM 同時実行数 | 8 | `LLM_CONCURRENCY` |
 | LLM タイムアウト | 60 秒 | `LLM_TIMEOUT_SECONDS` |
 | LLM リトライ | 2 回 | `LLM_MAX_RETRIES` |
+| LLM クライアントキャッシュ | 32 件 | 固定（`MAX_CACHED_ANALYZERS`） |
 | 履歴の保持 | 自動削除なし | 明示的な `DELETE` のみ |
 | SQLite ファイル | `./data/catfinder.db` | `DATABASE_PATH` |
+| SQLite の権限 | ファイル `0600` / 新規ディレクトリ `0700` | 固定（POSIX のみ） |
 | 作業ディレクトリ | OS の一時ディレクトリ | `UPLOAD_DIR` |
 
 ## テスト
@@ -414,16 +421,19 @@ uv run ruff check .
   `llm_concurrency` を超えないことを検証する。
 - `tests/test_jobs.py` は `eta_seconds` の計算（完了 0 枚・全完了・開始時刻なしの
   `null` を含む）と、シャットダウン時に実行中の画像が「判定が中断されました。」で
-  `error` になることを検証する。
+  `error` になること、アナライザーの `aclose()` が呼ばれることを検証する。
 - `tests/test_config.py` は `MAX_FILES` の既定値 500 と上限 500 を検証する。
 - `tests/test_storage.py` は SQLite の往復（ジョブ・画像 BLOB・使用量・ログ）、
-  履歴の並びと集計、再起動時の中断処理、削除を検証する。
+  履歴の並びと集計、再起動時の中断処理、削除に加え、DB 本体とサイドカーが
+  `0600`、新規ディレクトリが `0700` になることを検証する（POSIX のみ）。
 - `tests/test_api.py` は履歴・実行ログの API、履歴削除（`DELETE`）でジョブと
   画像ファイルが消えること、アプリを再起動しても結果・画像が取得できることを
   検証する。
 - `tests/test_analyzer.py` は `usage_metadata` からのトークン・コスト抽出、
   常に `json_schema` を使うこと、失敗時にフォールバックしないこと、
-  OpenRouter 接続時の `require_parameters` 付与を検証する。
+  OpenRouter 接続時の `require_parameters` 付与に加え、LRU の上限、
+  追い出し時の解放、使用中クライアントの遅延解放、1 つのクライアントを閉じても
+  別のクライアントが閉じられないことを検証する。
 - `tests/test_models.py` は vision + `structured_outputs` の絞り込み、既定モデルの
   解決、`supported_parameters` からの capability 抽出、fetch 関数を差し替えた
   モデル一覧の取得・キャッシュ・フォールバックを検証する。実プロバイダへの接続は
@@ -481,6 +491,7 @@ npm run build
 | 残り時間が実測と大きくずれる | 超概算のため。画像サイズ・モデル・レート制限で変動する |
 | 画像が大きすぎる | `MAX_FILE_MB` を上げるか、クライアント側で縮小する |
 | 履歴が表示されない | `DATABASE_PATH` の場所と書き込み権限、`GET /api/analyses` の応答を確認 |
+| DB が他のユーザーから読める | POSIX では DB とサイドカーが `0600`、新規ディレクトリが `0700`。既存ディレクトリは自動変更しないため、必要なら `chmod 700` を実行する |
 | 過去の画像が表示されない | ジョブが削除されていないか、`GET /api/analyses/{id}/images/{image_id}` を確認 |
 | 再起動後に実行中だったジョブがエラー | 仕様。正常終了時は「判定が中断されました。」、異常終了後の再起動時は「サーバー再起動により中断されました。」になる |
 | DB が大きくなった | 履歴を DELETE するか、`DATABASE_PATH` のファイルサイズを確認 |
@@ -509,4 +520,9 @@ npm run build
 - 履歴は自動削除しない。ページング API はあるが、UI は直近 50 件のみ表示する。
 - 実行ログは古い順に最大 1000 件まで返す。1000 件を超えると新しいログは
   取得できない。
+- LLM クライアントのキャッシュは 32 件。32 種類を超えるモデル・パラメータの
+  組み合わせを切り替えると、古いクライアントは破棄され、次回利用時に再作成される
+  （使用中のクライアントはリクエスト完了後に解放される）。
+- DB の権限設定は POSIX のみ。Windows では `0600` / `0700` は適用されない。
+  既存の保存先ディレクトリの権限は自動変更しない。
 - 個別画像の再判定、キャンセル UI、履歴の検索は未実装。

@@ -9,6 +9,15 @@ from app.schemas import AnalysisStatus, ImageStatus
 from tests.conftest import FakeAnalyzer
 
 
+class ClosingAnalyzer(FakeAnalyzer):
+    def __init__(self) -> None:
+        super().__init__()
+        self.closed = False
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
 def test_estimate_remaining_seconds_uses_completion_rate():
     assert estimate_remaining_seconds(total=10, completed=2, elapsed_seconds=10) == 40
     assert estimate_remaining_seconds(total=3, completed=1, elapsed_seconds=1.2) == 2
@@ -75,3 +84,12 @@ async def test_shutdown_marks_running_images_as_interrupted(settings, tmp_path):
     assert stored.status == AnalysisStatus.COMPLETED
     assert stored.images[0].status == ImageStatus.ERROR
     assert stored.images[0].error == "判定が中断されました。"
+
+
+async def test_shutdown_closes_the_analyzer(settings, tmp_path):
+    analyzer = ClosingAnalyzer()
+    service = AnalysisService(settings, analyzer, upload_root=tmp_path)
+
+    await service.shutdown()
+
+    assert analyzer.closed is True

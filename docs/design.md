@@ -100,9 +100,9 @@ pending ──> running ──> cat
 | `app/config.py` | `pydantic-settings` による環境変数読み込み |
 | `app/models.py` | 接続先 `/models` からの vision + Structured Output 対応モデル一覧取得、パラメータ対応状況の抽出、キャッシュ、許可判定 |
 | `app/images.py` | 実データ検証、表示用ファイル名の無害化、作業ディレクトリへの保存 |
-| `app/analyzer.py` | LangChain メッセージ構築、`json_schema` 構造化出力、モデル・パラメータ別クライアントのキャッシュ、usage 抽出 |
+| `app/analyzer.py` | LangChain メッセージ構築、`json_schema` 構造化出力、モデル・パラメータ別クライアントの LRU キャッシュ（上限 32）と解放、usage 抽出 |
 | `app/jobs.py` | ジョブ登録、並列実行、集計（usage・残り時間含む）、実行ログ、削除 |
-| `app/storage.py` | SQLite のスキーマ、ジョブ・画像 BLOB・実行ログの読み書き、再起動時の中断処理 |
+| `app/storage.py` | SQLite のスキーマ、ジョブ・画像 BLOB・実行ログの読み書き、DB ファイルの権限、再起動時の中断処理 |
 | `app/domain.py` | ジョブと画像の内部データ構造 |
 | `app/schemas.py` | API と LLM 出力の Pydantic モデル（`ChatOptions` / `TokenUsage` / 履歴 / ログ含む） |
 | `frontend/src/api.ts` | HTTP クライアント、API パラメータの送信、履歴・実行ログ取得、エラー整形 |
@@ -126,6 +126,9 @@ kwargs = dict(
     max_retries=settings.llm_max_retries,
     reasoning_effort=options.reasoning_effort,  # 指定時のみ
     max_tokens=options.max_tokens,              # 指定時のみ
+    http_client=http_client,                    # この ChatOpenAI 専用
+    http_async_client=http_async_client,
+    http_socket_options=(),                     # 既定 transport 注入を止める
 )
 if supports_temperature:
     kwargs["temperature"] = options.temperature if options.temperature is not None else 0.0
@@ -154,8 +157,16 @@ ChatOpenAI(**kwargs)
   従来どおりパラメータを送る。UI は `supports_temperature: false` のモデルで
   Temperature 入力を無効化し、入力済みの値をクリアする。
 - `ChatOpenAI` はモデルと実効パラメータ（推論の強さ・temperature・max_tokens）
-  の組ごとに 1 個生成し、`MultiModelCatAnalyzer` がプロセス内にキャッシュする。
-  判定構造（プロンプト・構造化出力）はモデル間で共有する。
+  の組ごとに 1 個生成し、`MultiModelCatAnalyzer` が LRU
+  （上限 `MAX_CACHED_ANALYZERS = 32`）でプロセス内にキャッシュする。
+  あふれたクライアントは、そのクライアントを使っているリクエストが終わってから
+  閉じる。アプリ終了時はキャッシュを空にし、未使用のクライアントを解放する
+  （使用中のものはリクエスト完了時に解放する）。判定構造（プロンプト・
+  構造化出力）はモデル間で共有する。
+- `ChatOpenAI` ごとに専用の `httpx.Client` / `httpx.AsyncClient` を渡す。
+  langchain-openai は既定の HTTP クライアントをプロセス内で共有するため、
+  共有クライアントを閉じると別モデルの判定まで壊れるのを避ける。
+  キャッシュから追い出すときとシャットダウン時に、専用クライアントだけを閉じる。
 - 選択肢の並び順は、無料モデルを先頭・以降 ID 順に並べ替える（既定値が一覧に
   含まれる場合は常に最初）。vision 判定は `architecture` が存在しない接続先では
   保留（全部返す）、存在する場合は画像入力を明示的に表明するモデルのみ残す。
@@ -199,6 +210,11 @@ ChatOpenAI(**kwargs)
 - タイムアウトとリトライは LangChain / OpenAI クライアント側の設定に委ねる。
 - SQLite への読み書きは `asyncio.to_thread` で行い、イベントループを止めない。
   読み書きは 1 本の `asyncio.Lock` で直列化する。
+- SQLite の DB 本体とサイドカー（`-wal` / `-shm` / `-journal`）は `0600`、
+  新しく作る保存先ディレクトリは `0700` にする。既存ディレクトリの権限は
+  自動変更しない。
+- `scripts/server.sh` は `umask 077` で起動し、新規作成される DB・ログ・PID
+  ファイルを所有者のみに制限する。
 - 履歴の自動削除はしない。`DELETE /api/analyses/{id}` で明示的に削除する。
 - アプリ終了時は実行中タスクをキャンセルし、未完了の画像を `error`
   （「判定が中断されました。」）、ジョブを `completed` に更新する。履歴（SQLite）は
@@ -247,7 +263,9 @@ ChatOpenAI(**kwargs)
 - エラーメッセージには LLM 例外の内容を含む（最大 300 文字）。ローカル用途の
   デバッグ性を優先した割り切りで、公開サービスにする場合はサニタイズが必要。
 - 履歴・画像・実行ログは SQLite に残る。DB ファイルにはアップロード画像が
-  そのまま入るため、`DATABASE_PATH` のバックアップとアクセス権に注意する。
+  そのまま入るため、`DATABASE_PATH` のバックアップに注意する。アプリが作成する
+  DB 本体とサイドカーは `0600`、新規ディレクトリは `0700` だが、既存ディレクトリの
+  権限は自動変更しない。
 - 履歴は自動削除しない。ディスク使用量は `DATABASE_PATH` のファイルで増える。
 
 ## 拡張の候補

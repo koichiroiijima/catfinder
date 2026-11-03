@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import os
+import stat
 import time
 from pathlib import Path
+
+import pytest
 
 from app.domain import AnalysisJob, JobImage
 from app.schemas import AnalysisStatus, ChatOptions, ImageStatus, TokenUsage
@@ -28,6 +32,20 @@ def _image(image_id: str = "image-1") -> JobImage:
         size_bytes=5,
         status=ImageStatus.RUNNING,
     )
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes only")
+async def test_store_restricts_database_permissions(tmp_path):
+    path = tmp_path / "private" / "catfinder.db"
+    store = AnalysisStore(path)
+    await store.create_job(_job())
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    for suffix in ("-wal", "-shm", "-journal"):
+        sidecar = path.with_name(f"{path.name}{suffix}")
+        if sidecar.exists():
+            assert stat.S_IMODE(sidecar.stat().st_mode) == 0o600
 
 
 async def test_store_round_trips_job_images_usage_and_logs(tmp_path):

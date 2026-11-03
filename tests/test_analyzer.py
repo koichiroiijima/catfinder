@@ -6,6 +6,7 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from app.analyzer import (
+    MAX_CACHED_ANALYZERS,
     LangChainCatAnalyzer,
     MultiModelCatAnalyzer,
     build_messages,
@@ -94,21 +95,81 @@ class FakeModel:
         )
 
 
+async def _cached_analyzer(
+    analyzer: MultiModelCatAnalyzer,
+    model: str,
+    options: ChatOptions | None = None,
+    *,
+    supports_temperature: bool = True,
+) -> LangChainCatAnalyzer:
+    entry = await analyzer._acquire(
+        model,
+        options,
+        supports_temperature=supports_temperature,
+    )
+    try:
+        return entry.analyzer
+    finally:
+        await analyzer._release(entry)
+
+
+class DummyChatModel:
+    def __init__(self, **kwargs) -> None:
+        self.kwargs = kwargs
+        self.root_async_client = None
+        self.root_client = None
+
+
+class AsyncClosableClient:
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class SyncClosableClient:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class ClosableModel:
+    def __init__(self) -> None:
+        self.root_async_client = AsyncClosableClient()
+        self.root_client = SyncClosableClient()
+
+
 def test_create_analyzer_requires_a_model():
     assert create_analyzer(Settings(_env_file=None, llm_model="")) is None
     analyzer = create_analyzer(Settings(_env_file=None))
     assert isinstance(analyzer, MultiModelCatAnalyzer)
 
 
-def test_multi_model_analyzer_caches_one_chat_model_per_name_and_options():
+async def test_multi_model_analyzer_caches_one_chat_model_per_name_and_options():
     analyzer = create_analyzer(Settings(_env_file=None))
+    assert isinstance(analyzer, MultiModelCatAnalyzer)
 
-    first = analyzer._analyzer_for("model-a", ChatOptions())
-    second = analyzer._analyzer_for("model-a", ChatOptions())
-    default_temperature = analyzer._analyzer_for("model-a", ChatOptions(temperature=0.0))
-    effort = analyzer._analyzer_for("model-a", ChatOptions(reasoning_effort="high"))
-    limited = analyzer._analyzer_for("model-a", ChatOptions(max_tokens=500))
-    other = analyzer._analyzer_for("model-b", ChatOptions())
+    first = await _cached_analyzer(analyzer, "model-a")
+    second = await _cached_analyzer(analyzer, "model-a")
+    default_temperature = await _cached_analyzer(
+        analyzer,
+        "model-a",
+        ChatOptions(temperature=0.0),
+    )
+    effort = await _cached_analyzer(
+        analyzer,
+        "model-a",
+        ChatOptions(reasoning_effort="high"),
+    )
+    limited = await _cached_analyzer(
+        analyzer,
+        "model-a",
+        ChatOptions(max_tokens=500),
+    )
+    other = await _cached_analyzer(analyzer, "model-b")
 
     assert first is second
     assert first is default_temperature
@@ -123,14 +184,16 @@ def test_multi_model_analyzer_caches_one_chat_model_per_name_and_options():
     assert limited._model.max_tokens == 500
     assert first._model.temperature == 0.0
 
+    await analyzer.aclose()
 
-def test_multi_model_analyzer_omits_temperature_when_unsupported():
+
+async def test_multi_model_analyzer_omits_temperature_when_unsupported():
     analyzer = MultiModelCatAnalyzer(Settings(_env_file=None))
 
-    supported = analyzer._analyzer_for("model-a", ChatOptions())
-    unsupported = analyzer._analyzer_for(
+    supported = await _cached_analyzer(analyzer, "model-a")
+    unsupported = await _cached_analyzer(
+        analyzer,
         "model-a",
-        ChatOptions(),
         supports_temperature=False,
     )
 
@@ -138,26 +201,128 @@ def test_multi_model_analyzer_omits_temperature_when_unsupported():
     assert supported._model.temperature == 0.0
     assert unsupported._model.temperature is None
 
+    await analyzer.aclose()
 
-def test_openrouter_clients_require_capable_endpoints():
+
+async def test_openrouter_clients_require_capable_endpoints():
     settings = Settings(_env_file=None)
     analyzer = MultiModelCatAnalyzer(settings)
 
-    client = analyzer._analyzer_for("model-a")._model
+    client = (await _cached_analyzer(analyzer, "model-a"))._model
 
     assert client.extra_body == {"provider": {"require_parameters": True}}
 
+    await analyzer.aclose()
 
-def test_other_providers_do_not_get_openrouter_routing():
+
+async def test_other_providers_do_not_get_openrouter_routing():
     settings = Settings(
         _env_file=None,
         llm_base_url="http://127.0.0.1:11434/v1",
     )
     analyzer = MultiModelCatAnalyzer(settings)
 
-    client = analyzer._analyzer_for("model-a")._model
+    client = (await _cached_analyzer(analyzer, "model-a"))._model
 
     assert client.extra_body is None
+
+    await analyzer.aclose()
+
+
+async def test_multi_model_analyzer_bounds_cache_and_closes_evicted(monkeypatch):
+    monkeypatch.setattr("app.analyzer.ChatOpenAI", DummyChatModel)
+    closed: list[LangChainCatAnalyzer] = []
+
+    async def fake_aclose(self: LangChainCatAnalyzer) -> None:
+        closed.append(self)
+
+    monkeypatch.setattr(LangChainCatAnalyzer, "aclose", fake_aclose)
+    analyzer = MultiModelCatAnalyzer(Settings(_env_file=None))
+
+    built = [
+        await _cached_analyzer(
+            analyzer,
+            "model-a",
+            ChatOptions(max_tokens=index + 1),
+        )
+        for index in range(MAX_CACHED_ANALYZERS + 2)
+    ]
+
+    assert len(analyzer._analyzers) == MAX_CACHED_ANALYZERS
+    assert closed == built[:2]
+
+    await analyzer.aclose()
+
+    assert closed == built
+    assert analyzer._analyzers == {}
+
+
+async def test_evicted_analyzer_closes_after_its_request_finishes(monkeypatch):
+    monkeypatch.setattr("app.analyzer.ChatOpenAI", DummyChatModel)
+    closed: list[LangChainCatAnalyzer] = []
+
+    async def fake_aclose(self: LangChainCatAnalyzer) -> None:
+        closed.append(self)
+
+    monkeypatch.setattr(LangChainCatAnalyzer, "aclose", fake_aclose)
+    analyzer = MultiModelCatAnalyzer(Settings(_env_file=None))
+
+    in_flight = await analyzer._acquire("model-a", ChatOptions(max_tokens=1))
+    for index in range(MAX_CACHED_ANALYZERS):
+        entry = await analyzer._acquire(
+            "model-a",
+            ChatOptions(max_tokens=index + 2),
+        )
+        await analyzer._release(entry)
+
+    assert in_flight.retired is True
+    assert in_flight.analyzer not in closed
+
+    await analyzer._release(in_flight)
+
+    assert closed == [in_flight.analyzer]
+    await analyzer.aclose()
+
+
+async def test_analyzer_closes_provider_clients():
+    model = ClosableModel()
+
+    await LangChainCatAnalyzer(model).aclose()
+
+    assert model.root_async_client.closed is True
+    assert model.root_client.closed is True
+
+
+async def test_closing_one_analyzer_does_not_close_another():
+    analyzer = MultiModelCatAnalyzer(Settings(_env_file=None))
+    first = await analyzer._build_analyzer(
+        "model-a",
+        temperature=0.0,
+        effort=None,
+        max_tokens=None,
+    )
+    second = await analyzer._build_analyzer(
+        "model-b",
+        temperature=0.0,
+        effort=None,
+        max_tokens=None,
+    )
+    first_async = first._model.http_async_client
+    first_sync = first._model.http_client
+    second_async = second._model.http_async_client
+    second_sync = second._model.http_client
+
+    assert first_async is not second_async
+    assert first_sync is not second_sync
+
+    await first.aclose()
+
+    assert first_async.is_closed is True
+    assert first_sync.is_closed is True
+    assert second_async.is_closed is False
+    assert second_sync.is_closed is False
+
+    await second.aclose()
 
 
 def test_is_openrouter_matches_the_host_only():
