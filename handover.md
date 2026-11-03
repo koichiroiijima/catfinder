@@ -47,6 +47,12 @@
   トップレベルセッションが idle になるたび、未コミット変更がある場合に
   `auto-committer` を子セッションで自動実行してコミットする（push はしない）。
   変更がなければ起動しない。
+- `.opencode/agents/docs-updater.md` と `.opencode/plugins/auto-docs-on-build`
+  を追加。Build エージェントのトップレベルセッションが idle になるたび、
+  global の `project-docs` スキルを使う `docs-updater` を子セッションで実行し、
+  `README.md` / `docs/` / `handover.md` / `AGENTS.md` を実装に追従させる。
+  ドキュメント更新はコミットせず、`auto-committer` に任せる。更新が不要なら
+  `docs-updater` は何も編集せず終了する。
 - `npm run build`、`npm run lint`、`uv run ruff check .` が成功。
 - `scripts/server.sh` / `scripts/ui.sh` で起動・停止を確認済み。
 - `/api/health` と Vite proxy 経由の `/api/health` を確認済み。
