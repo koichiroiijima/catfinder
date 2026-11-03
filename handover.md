@@ -57,6 +57,10 @@
   ドキュメント更新はコミットせず、`auto-committer` に任せる。更新が不要なら
   `docs-updater` は何も編集せず終了する。プロジェクト固有の `.opencode/` には
   置かない。
+- `script-runner`（`~/.config/opencode/agents/script-runner.md`）を汎用化して
+  global に移設。プロジェクトの `scripts/` 配下のスクリプトを、依頼された
+  引数の通りに実行して結果を報告する。解析・ファイル編集はしない。
+  プロジェクト固有の `.opencode/` には置かない。
 - `npm run build`、`npm run lint`、`uv run ruff check .` が成功。
 - `scripts/server.sh` / `scripts/ui.sh` で起動・停止を確認済み。
 - `/api/health` と Vite proxy 経由の `/api/health` を確認済み。

@@ -77,9 +77,10 @@ scripts/ui.sh start|stop|restart|status       # UI : 5173
   `handover.md` / `AGENTS.md` を最新化する。実装コードは編集せず、
   コミットもしない（`auto-committer` が担当）。このリポジトリの
   `.opencode/` には置かない。
-- `script-runner` (`.opencode/agents/script-runner.md`):
-  `scripts/server.sh` / `scripts/ui.sh` の実行専用。start / stop / restart /
-  status を引数の通りに実行して結果を報告する。解析・ファイル編集はしない。
+- `script-runner` (`~/.config/opencode/agents/script-runner.md`):
+  global のスクリプト実行サブエージェント。プロジェクトの `scripts/` 配下の
+  スクリプトを、依頼された引数の通りに実行して結果を報告する。解析・
+  ファイル編集はしない。このリポジトリの `.opencode/` には置かない。
 - `auto-commit-on-build` (`~/.config/opencode/plugins/auto-commit-on-build/index.ts`):
   global のプラグイン。Build エージェントのトップレベルセッションが
   `session.idle` になったとき、未コミット変更があれば `auto-committer` を

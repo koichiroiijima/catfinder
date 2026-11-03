@@ -222,13 +222,11 @@ frontend/
   src/components/       UI 部品
 tests/                  バックエンドのテスト
 scripts/                開発用の起動・停止スクリプト
-.opencode/
-  agents/               OpenCode のサブエージェント定義（script-runner）
 ```
 
-自動コミットと自動ドキュメント更新（`auto-committer` / `auto-commit-on-build` /
-`docs-updater` / `auto-docs-on-build`）は global の `~/.config/opencode/` にあり、
-このリポジトリには含まれません。
+自動コミット・自動ドキュメント更新・スクリプト実行（`auto-committer` /
+`auto-commit-on-build` / `docs-updater` / `auto-docs-on-build` / `script-runner`）
+は global の `~/.config/opencode/` にあり、このリポジトリには含まれません。
 
 ## 注意事項
 
