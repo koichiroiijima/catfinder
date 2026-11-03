@@ -67,9 +67,10 @@ scripts/ui.sh start|stop|restart|status       # UI : 5173
 
 ## サブエージェント
 
-- `auto-committer` (`.opencode/agents/auto-committer.md`):
-  呼び出された時点の未コミット変更を `commit` スキルでコミットする。
-  ファイル編集・`git push`・ブランチ操作は行わない。
+- `auto-committer` (`~/.config/opencode/agents/auto-committer.md`):
+  global の自動コミット担当サブエージェント。呼び出された時点の未コミット変更を
+  `commit` スキルでコミットする。ファイル編集・`git push`・ブランチ操作は行わない。
+  このリポジトリの `.opencode/` には置かない。
 - `docs-updater` (`.opencode/agents/docs-updater.md`):
   呼び出された時点の実装変更に合わせて、global の `project-docs` スキルで
   `README.md` / `docs/` / `handover.md` / `AGENTS.md` を最新化する。
@@ -77,10 +78,10 @@ scripts/ui.sh start|stop|restart|status       # UI : 5173
 - `script-runner` (`.opencode/agents/script-runner.md`):
   `scripts/server.sh` / `scripts/ui.sh` の実行専用。start / stop / restart /
   status を引数の通りに実行して結果を報告する。解析・ファイル編集はしない。
-- `auto-commit-on-build` (`.opencode/plugins/auto-commit-on-build/index.ts`):
-  Build エージェントのトップレベルセッションが `session.idle` になったとき、
-  未コミット変更があれば `auto-committer` を子セッションで自動実行する。
-  変更がなければ何もしない。
+- `auto-commit-on-build` (`~/.config/opencode/plugins/auto-commit-on-build/index.ts`):
+  global のプラグイン。Build エージェントのトップレベルセッションが
+  `session.idle` になったとき、未コミット変更があれば `auto-committer` を
+  子セッションで自動実行する。変更がなければ何もしない。
   自動コミットを止めたい場合はこのプラグインを削除するか、`BUILD_AGENT` の判定を変える。
 - `auto-docs-on-build` (`.opencode/plugins/auto-docs-on-build/index.ts`):
   Build エージェントのトップレベルセッションが `session.idle` になったとき、

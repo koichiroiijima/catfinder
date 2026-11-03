@@ -224,8 +224,11 @@ tests/                  バックエンドのテスト
 scripts/                開発用の起動・停止スクリプト
 .opencode/
   agents/               OpenCode のサブエージェント定義
-  plugins/              OpenCode のプラグイン（Build 完了時の自動コミット・自動ドキュメント更新）
+  plugins/              OpenCode のプラグイン（Build 完了時の自動ドキュメント更新）
 ```
+
+自動コミット（`auto-committer` / `auto-commit-on-build`）は global の
+`~/.config/opencode/` にあり、このリポジトリには含まれません。
 
 ## 注意事項
 

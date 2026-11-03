@@ -43,10 +43,12 @@
   `recover_interrupted()` が `queued` / `running` のジョブを中断扱い
   （ジョブは completed、未完了画像は「サーバー再起動により中断されました。」）に
   し、実行ログへ記録する。
-- `.opencode/plugins/auto-commit-on-build` を追加。Build エージェントの
-  トップレベルセッションが idle になるたび、未コミット変更がある場合に
-  `auto-committer` を子セッションで自動実行してコミットする（push はしない）。
-  変更がなければ起動しない。
+- `auto-committer`（`~/.config/opencode/agents/auto-committer.md`）と
+  `auto-commit-on-build`（`~/.config/opencode/plugins/auto-commit-on-build/index.ts`）
+  を global に移設。Build エージェントのトップレベルセッションが idle になるたび、
+  未コミット変更がある場合に `auto-committer` を子セッションで自動実行して
+  コミットする（push はしない）。変更がなければ起動しない。
+  プロジェクト固有の `.opencode/` には置かない。
 - `.opencode/agents/docs-updater.md` と `.opencode/plugins/auto-docs-on-build`
   を追加。Build エージェントのトップレベルセッションが idle になるたび、
   global の `project-docs` スキルを使う `docs-updater` を子セッションで実行し、
